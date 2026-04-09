@@ -212,7 +212,7 @@ ipcMain.handle('install-update', () => {
         app.relaunch();
         app.exit(0);
     } else {
-        autoUpdater.quitAndInstall(false, true);
+        autoUpdater.quitAndInstall(true, true);
     }
 });
 ipcMain.handle('open-external', (_, url) => { const { shell } = require('electron'); shell.openExternal(url); });
