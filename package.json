@@ -1,7 +1,7 @@
 {
   "name": "claude-desktop",
   "private": true,
-  "version": "1.5.10",
+  "version": "1.5.11",
   "description": "Claude Desktop - AI assistant with native capabilities",
   "author": {
     "name": "pretend1111",
@@ -102,8 +102,9 @@
       "category": "Utility"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": false
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
     }
   },
   "dependencies": {

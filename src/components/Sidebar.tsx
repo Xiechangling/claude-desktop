@@ -656,19 +656,22 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
               </div>
             )}
             {updateStatus.type === 'downloaded' && (
-              <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-claude-hover">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500 flex-shrink-0">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" /><path d="m9 12 2 2 4-4" />
-                </svg>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[12px] text-claude-text font-medium leading-tight">Updated to {updateStatus.version}</div>
-                  <button
-                    onClick={() => { const api = (window as any).electronAPI; api?.installUpdate?.(); }}
-                    className="text-[12px] text-claude-textSecondary hover:text-claude-text transition-colors mt-0.5"
-                  >
-                    Relaunch to apply
-                  </button>
+              <div className="px-3 py-3 rounded-lg bg-claude-hover">
+                <div className="flex items-center gap-2 mb-1">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-claude-text flex-shrink-0">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  <div className="text-[13px] text-claude-text font-medium leading-tight">Updated to {updateStatus.version}</div>
                 </div>
+                <div className="text-[11.5px] text-claude-textSecondary mb-2.5 ml-6">Relaunch to apply</div>
+                <button
+                  onClick={() => { const api = (window as any).electronAPI; api?.installUpdate?.(); }}
+                  className="w-full px-3 py-1.5 rounded-md bg-claude-bg border border-claude-border text-[13px] text-claude-text font-medium hover:bg-claude-btnHover transition-colors"
+                >
+                  Relaunch
+                </button>
               </div>
             )}
           </div>
