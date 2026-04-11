@@ -122,6 +122,7 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [userMenuPos, setUserMenuPos] = useState<{ bottom: number; left: number } | null>(null);
   const [planLabel, setPlanLabel] = useState('Free plan');
+  const [usageData, setUsageData] = useState<{ token_used: number; token_quota: number } | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [isRecentsCollapsed, setIsRecentsCollapsed] = useState(false);
@@ -247,6 +248,10 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
   const fetchPlan = async () => {
     try {
       const data = await getUserUsage();
+      setUsageData({
+        token_used: Number(data?.token_used) || 0,
+        token_quota: Number(data?.token_quota) || 0,
+      });
       if (data.plan && data.plan.name) {
         const nameMap: Record<string, string> = {
           '体验包': 'Trail plan',
@@ -708,14 +713,30 @@ const Sidebar = ({ isCollapsed, toggleSidebar, refreshTrigger, onNewChatClick, o
               {(userUser?.display_name || userUser?.full_name || userUser?.nickname || 'U').charAt(0).toUpperCase()}
             </div>
             <div className={`flex items-center justify-between w-full transition-opacity duration-200 ${isCollapsed ? 'opacity-0' : 'opacity-100'}`}>
-              <div className="text-left overflow-hidden">
+              <div className="text-left overflow-hidden flex-1 min-w-0">
                 <div
                   className="font-medium text-claude-text leading-tight"
                   style={{ fontSize: `${tunerConfig?.userNameSize || 15}px`, whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}
                 >
                   {userUser?.display_name || userUser?.full_name || userUser?.nickname || 'User'}
                 </div>
-                <div className="text-[13px] text-claude-textSecondary mt-1 leading-tight">{localStorage.getItem('user_mode') === 'selfhosted' ? 'Self-hosted' : planLabel}</div>
+                {localStorage.getItem('user_mode') === 'selfhosted' ? (
+                  <div className="text-[13px] text-claude-textSecondary mt-1 leading-tight">Self-hosted</div>
+                ) : usageData && usageData.token_quota > 0 ? (
+                  <div className="mt-1.5 mr-3">
+                    <div className="h-1 w-full rounded-full bg-claude-hover overflow-hidden">
+                      <div
+                        className="h-full bg-neutral-700 dark:bg-neutral-300 transition-[width] duration-300"
+                        style={{ width: `${Math.min(100, (usageData.token_used / usageData.token_quota) * 100)}%` }}
+                      />
+                    </div>
+                    <div className="text-[10px] text-claude-textSecondary mt-1 leading-none tabular-nums">
+                      ${usageData.token_used.toFixed(2)} / ${usageData.token_quota.toFixed(2)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[13px] text-claude-textSecondary mt-1 leading-tight">{planLabel}</div>
+                )}
               </div>
               <ChevronUp size={16} className="text-claude-textSecondary shrink-0 ml-1" />
             </div>

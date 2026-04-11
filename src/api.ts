@@ -661,6 +661,23 @@ export interface Provider {
   id: string; name: string; apiKey: string; baseUrl: string;
   format: 'anthropic' | 'openai'; models: ProviderModel[]; enabled: boolean;
   icon?: string;
+  supportsWebSearch?: boolean;
+  webSearchStrategy?: 'dashscope' | 'bigmodel' | 'anthropic_native' | null;
+  webSearchTestedAt?: number;
+  webSearchTestReason?: string | null;
+}
+
+export interface WebSearchTestResult {
+  ok: boolean;
+  strategy?: 'dashscope' | 'bigmodel' | 'anthropic_native' | null;
+  hitCount?: number;
+  reason?: string;
+}
+
+export async function testProviderWebSearch(id: string): Promise<WebSearchTestResult> {
+  const res = await fetch(`${API_BASE}/providers/${id}/test-websearch`, { method: 'POST' });
+  if (!res.ok) return { ok: false, reason: 'HTTP ' + res.status };
+  return res.json();
 }
 
 export async function getProviders(): Promise<Provider[]> {

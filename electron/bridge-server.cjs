@@ -257,12 +257,15 @@ function initServer(mainWindow) {
 
     // ===== Proxy-level Web Search for OpenAI providers =====
     // Anthropic's web_search_20250305 is a server-side tool handled by the Anthropic API itself.
-    // OpenAI providers don't support it, so we intercept and perform the search at proxy level.
+    // For OpenAI-format providers, we only support web search when the provider has a native
+    // capability (DashScope enable_search / BigModel web_search tool). Providers without native
+    // support have the web_search_20250305 tool stripped from the request — the model simply
+    // doesn't have that tool and cannot claim to search.
     //
     // Strategy per provider:
-    //   DashScope (闃块噷): enable_search parameter
-    //   BigModel  (鏅鸿氨GLM): web_search tool type
-    //   Others   (SiliconFlow, etc.): Bing scraping fallback
+    //   DashScope (阿里 Qwen): enable_search parameter
+    //   BigModel  (智谱 GLM): web_search tool type
+    //   Others: not supported (stripped at proxy)
 
     // Helper: extract URLs from model response text (markdown links + bare URLs)
     function extractUrlsFromText(text) {
@@ -346,61 +349,23 @@ function initServer(mainWindow) {
         return { searchResults: results, summaryText: summary };
     }
 
-    // Universal fallback: Bing scraping (cn.bing.com 鈥?accessible from China)
-    async function searchViaBing(query) {
-        const headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept': 'text/html,application/xhtml+xml',
-        };
-        // Try cn.bing.com first, then bing.com
-        const urls = [
-            'https://cn.bing.com/search?q=' + encodeURIComponent(query) + '&count=10',
-            'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&count=10',
-        ];
-        let html = '';
-        for (const url of urls) {
-            try {
-                const resp = await fetch(url, { headers, signal: AbortSignal.timeout(15000), redirect: 'follow' });
-                if (resp.ok) { html = await resp.text(); break; }
-            } catch (_) { continue; }
-        }
-        if (!html) throw new Error('Bing search failed: all endpoints unreachable');
-
-        const results = [];
-        // Strategy 1: <li class="b_algo"> blocks (desktop Bing)
-        const algoRegex = /<li class="b_algo"[^>]*>([\s\S]*?)<\/li>/g;
-        let item;
-        while ((item = algoRegex.exec(html)) && results.length < 10) {
-            const block = item[1];
-            const hrefMatch = block.match(/<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/);
-            if (!hrefMatch) continue;
-            const url = hrefMatch[1];
-            const title = hrefMatch[2].replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim();
-            // Extract snippet from <p> or <div class="b_caption">
-            let snippet = '';
-            const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/) || block.match(/<div class="b_caption"[^>]*>[\s\S]*?<p>([\s\S]*?)<\/p>/);
-            if (snippetMatch) snippet = (snippetMatch[1] || '').replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').trim();
-            if (title) results.push({ title, url, snippet });
-        }
-
-        // Strategy 2: if b_algo didn't match, try generic <h2><a href> pattern
-        if (results.length === 0) {
-            const genericRegex = /<h2[^>]*>\s*<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-            while ((item = genericRegex.exec(html)) && results.length < 10) {
-                const title = item[2].replace(/<[^>]*>/g, '').trim();
-                if (title && !item[1].includes('bing.com')) results.push({ title, url: item[1], snippet: '' });
-            }
-        }
-
-        const summaryText = results.length > 0
-            ? results.map((r, i) => (i + 1) + '. [' + r.title + '](' + r.url + ')' + (r.snippet ? '\n   ' + r.snippet : '')).join('\n\n')
-            : 'No results found for: ' + query;
-        console.log('[Proxy] Bing search:', results.length, 'results');
-        return { searchResults: results, summaryText };
+    // Resolve a native search strategy for a provider.
+    // Prefers the stored `webSearchStrategy` (set by the probe endpoint). Falls back to URL regex
+    // only when no strategy is recorded (e.g. legacy providers imported before the probe existed).
+    // Returns null if no native handler applies — caller must not synthesize a result.
+    function resolveNativeSearchStrategy(target) {
+        const strategy = target.webSearchStrategy;
+        if (strategy === 'dashscope') return (q) => searchViaDashScope(q, target);
+        if (strategy === 'bigmodel') return (q) => searchViaBigModel(q, target);
+        if (strategy) return null; // unknown strategy stored — refuse
+        const baseUrl = (target.baseUrl || '').toLowerCase();
+        if (/dashscope/i.test(baseUrl)) return (q) => searchViaDashScope(q, target);
+        if (/bigmodel|zhipuai/i.test(baseUrl)) return (q) => searchViaBigModel(q, target);
+        return null;
     }
 
-    // Main handler: intercept web_search_20250305, dispatch to provider or fallback
+    // Main handler: dispatch web_search_20250305 to a native provider strategy.
+    // Only called when the provider is known to support web search — there is no generic fallback.
     async function handleWebSearchProxy(anthropicReq, target, res) {
         // Extract search query from messages
         let searchQuery = '';
@@ -418,22 +383,19 @@ function initServer(mainWindow) {
         let searchResults = [];
         let summaryText = '';
 
-        // Dispatch: provider-native search 鈫?Bing fallback
-        const strategies = [];
-        if (/dashscope/i.test(baseUrl))              strategies.push(() => searchViaDashScope(searchQuery, target));
-        else if (/bigmodel|zhipuai/i.test(baseUrl))   strategies.push(() => searchViaBigModel(searchQuery, target));
-        // Bing is always the final fallback for any provider
-        strategies.push(() => searchViaBing(searchQuery));
-
-        for (const strategy of strategies) {
+        const strategy = resolveNativeSearchStrategy(target);
+        if (strategy) {
             try {
-                const result = await strategy();
+                const result = await strategy(searchQuery);
                 searchResults = result.searchResults || [];
                 summaryText = result.summaryText || '';
-                if (searchResults.length > 0 || summaryText.length > 50) break; // got useful results
             } catch (err) {
-                console.warn('[Proxy] Search strategy failed:', err.message, '鈥?trying next');
+                console.warn('[Proxy] Native search failed:', err.message);
+                summaryText = 'Web search failed: ' + err.message;
             }
+        } else {
+            // Should not happen — the tool is stripped before reaching here for unsupported providers.
+            summaryText = 'This provider does not support web search.';
         }
         if (!summaryText) summaryText = 'Web search returned no results for: ' + searchQuery;
 
@@ -526,10 +488,18 @@ function initServer(mainWindow) {
                         }
                     }
 
-                    // Intercept web_search_20250305 server tool for OpenAI providers
+                    // Intercept web_search_20250305 server tool for OpenAI providers.
+                    // If the provider declares native web search support AND we have a known
+                    // native handler for its baseUrl, dispatch. Otherwise, strip the tool so
+                    // the model cannot claim to search (no generic fallback).
                     const hasServerWebSearch = (anthropicReq.tools || []).some(t => t.type === 'web_search_20250305');
                     if (hasServerWebSearch && target.format === 'openai') {
-                        return await handleWebSearchProxy(anthropicReq, target, res);
+                        const nativeAvailable = target.supportsWebSearch === true && resolveNativeSearchStrategy(target) !== null;
+                        if (nativeAvailable) {
+                            return await handleWebSearchProxy(anthropicReq, target, res);
+                        }
+                        anthropicReq.tools = (anthropicReq.tools || []).filter(t => t.type !== 'web_search_20250305');
+                        console.log('[Proxy] Stripped web_search_20250305 (provider does not support web search)');
                     }
 
                     if (target.format === 'openai') {
@@ -1961,6 +1931,250 @@ function initServer(mainWindow) {
         res.json(models);
     });
 
+    // ===== Web search capability probe =====
+    // Sends a real test query to the provider and inspects the response for structured
+    // web search output. Only tests that produce real hits count as success.
+    async function probeOpenAIWebSearch(p) {
+        const endpointBase = (() => {
+            let e = normalizeBaseUrl(p.baseUrl || '');
+            if (!e.endsWith('/v1')) e += '/v1';
+            return e + '/chat/completions';
+        })();
+        const modelId = (p.models || []).find(m => m.enabled !== false)?.id || (p.models || [])[0]?.id;
+        if (!modelId) return { ok: false, strategy: null, reason: '无可用模型' };
+        const probeQuery = 'What is today\'s top news headline? Please search the web.';
+        const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (p.apiKey || '') };
+
+        // Strategy A: DashScope-style enable_search
+        try {
+            const resp = await fetch(endpointBase, {
+                method: 'POST', headers,
+                body: JSON.stringify({
+                    model: modelId,
+                    messages: [{ role: 'user', content: probeQuery }],
+                    enable_search: true,
+                    search_options: { forced_search: true, search_strategy: 'standard' },
+                    stream: false,
+                    max_tokens: 512,
+                }),
+                signal: AbortSignal.timeout(30000),
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                const searchInfo = data.search_info || data.web_search_info || null;
+                const hits = (searchInfo?.search_results || searchInfo?.results || data.search_results || []);
+                if (Array.isArray(hits) && hits.some(h => h && (h.url || h.link))) {
+                    return { ok: true, strategy: 'dashscope', hitCount: hits.length };
+                }
+            }
+        } catch (e) { console.log('[WebSearchProbe] DashScope strategy failed:', e.message); }
+
+        // Strategy B: BigModel/GLM-style web_search tool
+        try {
+            const resp = await fetch(endpointBase, {
+                method: 'POST', headers,
+                body: JSON.stringify({
+                    model: modelId,
+                    messages: [{ role: 'user', content: probeQuery }],
+                    tools: [{ type: 'web_search', web_search: { enable: true, search_query: probeQuery } }],
+                    stream: false,
+                    max_tokens: 512,
+                }),
+                signal: AbortSignal.timeout(30000),
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                const webSearch = data.web_search || data.choices?.[0]?.message?.web_search || null;
+                if (Array.isArray(webSearch) && webSearch.some(h => h && (h.link || h.url))) {
+                    return { ok: true, strategy: 'bigmodel', hitCount: webSearch.length };
+                }
+            }
+        } catch (e) { console.log('[WebSearchProbe] BigModel strategy failed:', e.message); }
+
+        return { ok: false, strategy: null, reason: 'No structured search results in response' };
+    }
+
+    // Engine-based Anthropic probe: runs a real throwaway engine conversation with the provider's
+    // credentials and a prompt that asks the model to use WebSearch. Parses the engine's stream-json
+    // output for WebSearch tool invocations and URL-bearing tool_result content. This matches the
+    // exact code path used by real chats, so aggregators/gateways that only work through the engine's
+    // Anthropic SDK (not via raw fetch) are handled correctly.
+    async function probeAnthropicWebSearch(p) {
+        return new Promise((resolve) => {
+            const rawModel = (p.models || []).find(m => m.enabled !== false)?.id || (p.models || [])[0]?.id;
+            if (!rawModel) return resolve({ ok: false, strategy: null, reason: '无可用模型' });
+            const modelId = rawModel.replace(/-thinking$/, '');
+
+            const tmpDir = path.join(os.tmpdir(), 'ws-probe-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+            try { fs.mkdirSync(tmpDir, { recursive: true }); } catch (_) {}
+            const claudeDir = path.join(os.homedir(), '.claude');
+
+            const cliArgs = [
+                '--preload', enginePreload,
+                '--env-file=' + engineEnv,
+                engineCli,
+                '--input-format', 'stream-json',
+                '--output-format', 'stream-json',
+                '--verbose',
+                '--include-partial-messages',
+                '--permission-mode', 'bypassPermissions',
+                '--add-dir', claudeDir,
+                '--model', modelId,
+            ];
+
+            const envVars = Object.assign({}, process.env);
+            if (gitBashPath && !envVars.CLAUDE_CODE_GIT_BASH_PATH) envVars.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
+            envVars.ANTHROPIC_API_KEY = p.apiKey || '';
+            envVars.ANTHROPIC_BASE_URL = normalizeBaseUrl(p.baseUrl || '');
+
+            let child;
+            try {
+                const { spawn } = require('child_process');
+                child = spawn(bunExePath, cliArgs, { cwd: tmpDir, env: envVars, stdio: ['pipe', 'pipe', 'pipe'] });
+            } catch (err) {
+                return resolve({ ok: false, strategy: null, reason: 'Engine spawn failed: ' + err.message });
+            }
+
+            let finished = false;
+            let ready = false;
+            let calledWebSearch = false;
+            let hitCount = 0;
+            let buf = '';
+            let stderrBuf = '';
+            let errorMessage = null;
+
+            const cleanup = () => {
+                try { child.kill(); } catch (_) {}
+                setTimeout(() => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {} }, 500);
+            };
+            const finish = (result) => {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timeout);
+                cleanup();
+                resolve(result);
+            };
+            const timeout = setTimeout(() => {
+                finish({ ok: false, strategy: null, reason: 'Probe timed out after 120s' });
+            }, 120000);
+
+            const extractUrlsFromToolResult = (content) => {
+                if (!content) return 0;
+                const text = typeof content === 'string' ? content : JSON.stringify(content);
+                // WebSearchTool formats: `Links: [{"title":"...","url":"..."}, ...]`
+                const linksMatch = text.match(/Links:\s*(\[[\s\S]*?\])/);
+                if (linksMatch) {
+                    try {
+                        const arr = JSON.parse(linksMatch[1]);
+                        if (Array.isArray(arr)) return arr.filter(x => x && x.url).length;
+                    } catch (_) {}
+                }
+                // Fallback: count bare URLs
+                const urlMatches = text.match(/https?:\/\/[^\s"'<>)]+/g);
+                return urlMatches ? urlMatches.length : 0;
+            };
+
+            const processEvt = (evt) => {
+                if (evt.type === 'system' && evt.subtype === 'init') {
+                    ready = true;
+                    try {
+                        const probePrompt = 'Call the WebSearch tool right now with query "latest news today". Do not answer from memory. Do not explain — just invoke the tool once and summarize the first 2 results.';
+                        child.stdin.write(JSON.stringify({
+                            type: 'user',
+                            message: { role: 'user', content: probePrompt },
+                            uuid: uuidv4(),
+                        }) + '\n');
+                    } catch (err) {
+                        finish({ ok: false, strategy: null, reason: 'Failed to send probe prompt: ' + err.message });
+                    }
+                    return;
+                }
+                if (evt.type === 'assistant' && evt.message?.content) {
+                    for (const block of (evt.message.content || [])) {
+                        if (block.type === 'tool_use' && block.name === 'WebSearch') {
+                            calledWebSearch = true;
+                        }
+                    }
+                }
+                if (evt.type === 'user' && evt.message?.content) {
+                    const blocks = Array.isArray(evt.message.content) ? evt.message.content : [];
+                    for (const block of blocks) {
+                        if (block.type === 'tool_result') {
+                            const n = extractUrlsFromToolResult(block.content);
+                            if (n > 0) hitCount += n;
+                        }
+                    }
+                }
+                if (evt.type === 'result') {
+                    if (hitCount > 0) {
+                        finish({ ok: true, strategy: 'anthropic_native', hitCount });
+                    } else if (calledWebSearch) {
+                        finish({ ok: false, strategy: null, reason: 'WebSearch was invoked but returned 0 URLs' });
+                    } else if (evt.subtype === 'error_during_execution' || evt.is_error) {
+                        finish({ ok: false, strategy: null, reason: errorMessage || 'Engine reported an error' });
+                    } else {
+                        finish({ ok: false, strategy: null, reason: 'Model did not invoke WebSearch — upstream may lack web search support' });
+                    }
+                }
+            };
+
+            child.stdout.on('data', (chunk) => {
+                buf += chunk.toString();
+                const lines = buf.split('\n');
+                buf = lines.pop() || '';
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try { processEvt(JSON.parse(line)); } catch (_) {}
+                }
+            });
+            child.stderr.on('data', (chunk) => {
+                const s = chunk.toString();
+                stderrBuf += s;
+                // Cap stderr buffer
+                if (stderrBuf.length > 4000) stderrBuf = stderrBuf.slice(-4000);
+                // Detect common auth/network errors early
+                if (!errorMessage) {
+                    const lower = s.toLowerCase();
+                    if (lower.includes('401') || lower.includes('unauthorized')) errorMessage = 'Upstream rejected credentials (401)';
+                    else if (lower.includes('403')) errorMessage = 'Upstream forbidden (403)';
+                    else if (lower.includes('invalid x-api-key')) errorMessage = 'Invalid API key';
+                    else if (lower.includes('enotfound') || lower.includes('dns')) errorMessage = 'DNS resolution failed';
+                }
+            });
+            child.on('error', (err) => {
+                finish({ ok: false, strategy: null, reason: 'Engine process error: ' + err.message });
+            });
+            child.on('exit', (code) => {
+                if (!finished) {
+                    const tail = stderrBuf ? ' (stderr tail: ' + stderrBuf.slice(-240).replace(/\s+/g, ' ') + ')' : '';
+                    finish({ ok: false, strategy: null, reason: (errorMessage || ('Engine exited with code ' + code)) + tail });
+                }
+            });
+        });
+    }
+
+    server.post('/api/providers/:id/test-websearch', async (req, res) => {
+        const p = providers.find(x => x.id === req.params.id);
+        if (!p) return res.status(404).json({ error: 'Provider not found' });
+        if (!p.baseUrl || !p.apiKey) return res.json({ ok: false, reason: 'Missing baseUrl or apiKey' });
+        console.log('[WebSearchProbe] Testing provider:', p.name, '| format:', p.format);
+        try {
+            const result = p.format === 'anthropic'
+                ? await probeAnthropicWebSearch(p)
+                : await probeOpenAIWebSearch(p);
+            console.log('[WebSearchProbe] Result:', p.name, '→', JSON.stringify(result));
+            p.supportsWebSearch = !!result.ok;
+            p.webSearchStrategy = result.strategy || null;
+            p.webSearchTestedAt = Date.now();
+            p.webSearchTestReason = result.reason || null;
+            saveProviders();
+            res.json(result);
+        } catch (err) {
+            console.error('[WebSearchProbe] Unexpected error:', err);
+            res.status(500).json({ ok: false, reason: err.message });
+        }
+    });
+
     // Workspace config
     server.get('/api/workspace-config', (req, res) => {
         res.json({ workspacesDir, defaultDir: defaultWorkspacesDir });
@@ -2958,9 +3172,17 @@ You have the following skills available. When a user's request matches a skill's
         const modelId = rawModel.replace(/-thinking$/, '');
         const provider = user_mode === 'selfhosted' ? resolveProvider(modelId) : null;
         let apiKey, baseUrl, apiFormat = 'anthropic';
-        if (provider) { apiKey = provider.apiKey; baseUrl = provider.baseUrl; apiFormat = provider.format || 'anthropic'; console.log('[Chat] Provider:', provider.name, '| format:', apiFormat, '| model:', modelId); }
-        else { const validToken = (env_token && env_token !== 'self-hosted') ? env_token : ''; apiKey = validToken || engineEnvVars.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY; baseUrl = validToken ? (env_base_url || engineEnvVars.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL) : (engineEnvVars.ANTHROPIC_BASE_URL || env_base_url || process.env.ANTHROPIC_BASE_URL); }
-        return { modelId, provider, apiKey, baseUrl, apiFormat };
+        let supportsWebSearch = false;
+        let webSearchStrategy = null;
+        if (provider) {
+            apiKey = provider.apiKey; baseUrl = provider.baseUrl; apiFormat = provider.format || 'anthropic';
+            // Web search is gated by the stored probe result — no implicit support based on format.
+            supportsWebSearch = provider.supportsWebSearch === true;
+            webSearchStrategy = provider.webSearchStrategy || null;
+            console.log('[Chat] Provider:', provider.name, '| format:', apiFormat, '| model:', modelId, '| webSearch:', supportsWebSearch, '| strategy:', webSearchStrategy);
+        }
+        else { const validToken = (env_token && env_token !== 'self-hosted') ? env_token : ''; apiKey = validToken || engineEnvVars.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY; baseUrl = validToken ? (env_base_url || engineEnvVars.ANTHROPIC_BASE_URL || process.env.ANTHROPIC_BASE_URL) : (engineEnvVars.ANTHROPIC_BASE_URL || env_base_url || process.env.ANTHROPIC_BASE_URL); supportsWebSearch = true; }
+        return { modelId, provider, apiKey, baseUrl, apiFormat, supportsWebSearch, webSearchStrategy };
     }
 
     function handleTurnEvent(engine, convId, conv, evt) {
@@ -3156,7 +3378,7 @@ You have the following skills available. When a user's request matches a skill's
             envVars.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS = '80000';
         }
         if (apiFormat === 'openai' && proxyPort > 0) {
-            proxyTarget = { apiKey, baseUrl, model: modelId, format: 'openai', conversationId: convId };
+            proxyTarget = { apiKey, baseUrl, model: modelId, format: 'openai', conversationId: convId, supportsWebSearch: config.supportsWebSearch === true, webSearchStrategy: config.webSearchStrategy || null };
             envVars.ANTHROPIC_API_KEY = 'proxy-key'; envVars.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + proxyPort + '/v1';
             try { const warmUrl = new URL(normalizeBaseUrl(baseUrl)); require('dns').resolve4(warmUrl.hostname, () => {}); fetch(warmUrl.origin, { method: 'HEAD', signal: AbortSignal.timeout(5000) }).catch(() => {}); } catch (_) {}
             console.log('[EnginePool] OpenAI proxy, model=' + modelId);
@@ -3470,7 +3692,7 @@ You have the following skills available. When a user's request matches a skill's
             engine.lastUsed = Date.now();
             console.log('[Chat] Turn starting', '| conv=', conversation_id, '| engine=', summarizeEngine(engine), '| promptLen=', finalPrompt.length);
             if (config.apiFormat === 'openai' && proxyPort > 0) {
-                proxyTarget = { apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.modelId, format: 'openai', conversationId: conversation_id };
+                proxyTarget = { apiKey: config.apiKey, baseUrl: config.baseUrl, model: config.modelId, format: 'openai', conversationId: conversation_id, supportsWebSearch: config.supportsWebSearch === true, webSearchStrategy: config.webSearchStrategy || null };
             }
             engine.turn = {
                 sendSSE, assistantText: '', thinkingText: '',

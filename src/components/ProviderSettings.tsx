@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Check, Eye, EyeOff, RefreshCw, ChevronDown, ChevronRight, X } from 'lucide-react';
-import { getProviders, createProvider, updateProvider, deleteProvider, Provider, ProviderModel } from '../api';
+import { Plus, Trash2, Check, Eye, EyeOff, RefreshCw, ChevronDown, ChevronRight, X, Globe } from 'lucide-react';
+import { getProviders, createProvider, updateProvider, deleteProvider, testProviderWebSearch, Provider, ProviderModel } from '../api';
 
-// Auto-detect provider info from URL
+// Auto-detect provider info from URL.
+// `webSearch: 'native'` means the bridge has a dedicated native search handler for this provider.
+// Anthropic-format providers implicitly support web search via the upstream API's server tool.
 const KNOWN_PROVIDERS: Array<{
   match: (url: string) => boolean;
   name: string;
@@ -10,9 +12,11 @@ const KNOWN_PROVIDERS: Array<{
   color: string;
   letter: string;
   defaultModels?: ProviderModel[];
+  webSearch?: 'native';
 }> = [
     {
       match: u => /anthropic\.com/i.test(u), name: 'Anthropic', format: 'anthropic', color: '#D97757', letter: 'A',
+      webSearch: 'native',
       defaultModels: [{ id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }, { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }]
     },
     {
@@ -25,6 +29,7 @@ const KNOWN_PROVIDERS: Array<{
     },
     {
       match: u => /bigmodel\.cn/i.test(u), name: 'GLM (Zhipu)', format: 'openai', color: '#3B68FF', letter: 'G',
+      webSearch: 'native',
       defaultModels: [{ id: 'glm-5-plus', name: 'GLM-5 Plus' }, { id: 'glm-4-plus', name: 'GLM-4 Plus' }]
     },
     { match: u => /siliconflow/i.test(u), name: 'SiliconFlow', format: 'openai', color: '#7C3AED', letter: 'S' },
@@ -36,12 +41,17 @@ const KNOWN_PROVIDERS: Array<{
       match: u => /generativelanguage\.googleapis|gemini/i.test(u), name: 'Google Gemini', format: 'openai', color: '#4285F4', letter: 'G',
       defaultModels: [{ id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' }, { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' }]
     },
-    { match: u => /dashscope\.aliyuncs/i.test(u), name: 'Qwen (Aliyun)', format: 'openai', color: '#FF6A00', letter: 'Q' },
+    {
+      match: u => /dashscope\.aliyuncs/i.test(u), name: 'Qwen (Aliyun)', format: 'openai', color: '#FF6A00', letter: 'Q',
+      webSearch: 'native',
+    },
     {
       match: u => /api-cn\.jiazhuang/i.test(u), name: 'Clawparrot', format: 'anthropic', color: '#C6613F', letter: 'C',
+      webSearch: 'native',
       defaultModels: [{ id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }, { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }, { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5' }]
     },
   ];
+
 
 function detectProvider(url: string) {
   for (const kp of KNOWN_PROVIDERS) {
@@ -202,6 +212,10 @@ const ProviderSettings: React.FC = () => {
   const [defaultModel, setDefaultModel] = useState(localStorage.getItem('default_model') || '');
   const [chatModels, setChatModels] = useState<ChatModel[]>(loadChatModels());
 
+  // Per-provider web-search probe state. Valid values: 'testing' | 'success' | 'failed'.
+  // Absence means "never tested" (show as not supported).
+  const [webSearchTestState, setWebSearchTestState] = useState<Record<string, 'testing' | 'success' | 'failed'>>({});
+
   // New provider form
   const [showAdd, setShowAdd] = useState(false);
   const [newUrl, setNewUrl] = useState('');
@@ -217,20 +231,38 @@ const ProviderSettings: React.FC = () => {
     } catch (_) { }
   };
 
+  // Run the web-search probe for a provider and reflect the result in UI state.
+  // Kicked off automatically after import and also from the manual "Retest" button.
+  const handleTestWebSearch = async (id: string) => {
+    setWebSearchTestState(prev => ({ ...prev, [id]: 'testing' }));
+    try {
+      const result = await testProviderWebSearch(id);
+      setWebSearchTestState(prev => ({ ...prev, [id]: result.ok ? 'success' : 'failed' }));
+      // Bridge has already persisted supportsWebSearch/webSearchStrategy; pull the fresh record.
+      const list = await getProviders();
+      setProviderList(list);
+    } catch (_) {
+      setWebSearchTestState(prev => ({ ...prev, [id]: 'failed' }));
+    }
+  };
+
   const handleQuickAdd = async () => {
     if (!newUrl.trim() && !newKey.trim()) return;
     const url = newUrl.trim();
     const key = newKey.trim();
     const detected = detectProvider(url);
+    const format = detected?.format || 'openai';
 
-    // Create provider with detected or default settings
+    // Every provider starts with supportsWebSearch=false. It flips to true only after the
+    // probe endpoint returns success.
     const p = await createProvider({
       name: detected?.name || extractDomainName(url),
       baseUrl: url,
-      format: detected?.format || 'openai',
+      format,
       apiKey: key,
       models: (detected?.defaultModels || []).map(m => ({ ...m, enabled: true })),
       enabled: true,
+      supportsWebSearch: false,
     });
     setProviderList(prev => [...prev, p]);
     setSelectedId(p.id);
@@ -257,6 +289,10 @@ const ProviderSettings: React.FC = () => {
         // Also try Anthropic format if OpenAI fails
       } catch (_) { }
     }
+
+    // Kick off the web-search capability test automatically after import.
+    // Wait a tick so the user sees the provider card before the spinner appears.
+    setTimeout(() => { handleTestWebSearch(p.id); }, 300);
   };
 
   // Extract a readable name from domain
@@ -529,7 +565,19 @@ const ProviderSettings: React.FC = () => {
                     <div className={`text-[13px] truncate ${isActive ? 'text-claude-text font-medium' : 'text-claude-textSecondary'}`}>
                       {p.name}
                     </div>
-                    <div className="text-[10px] text-claude-textSecondary/50">{(p.models || []).length} models</div>
+                    <div className="text-[10px] text-claude-textSecondary/50 flex items-center gap-1.5">
+                      <span>{(p.models || []).length} models</span>
+                      {webSearchTestState[p.id] === 'testing' ? (
+                        <span className="flex items-center gap-1 text-[#387ee0] font-medium" title="正在测试网页搜索能力">
+                          <RefreshCw size={9} className="animate-spin" />
+                          <span>测试中</span>
+                        </span>
+                      ) : p.supportsWebSearch ? (
+                        <span className="flex items-center gap-0.5 text-[#387ee0]" title="已验证支持网页搜索">
+                          <Globe size={9} />
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                   {!p.enabled && (
                     <div className="w-1.5 h-1.5 rounded-full bg-claude-textSecondary/30 flex-shrink-0" title="Disabled" />
@@ -644,12 +692,15 @@ const ProviderSettings: React.FC = () => {
                     type="text"
                     value={selected.baseUrl || ''}
                     onChange={e => {
-                      handleUpdate(selected.id, { baseUrl: e.target.value });
-                      // Auto-detect format when URL changes
-                      const det = detectProvider(e.target.value);
-                      if (det && det.format !== selected.format) {
-                        handleUpdate(selected.id, { format: det.format });
-                      }
+                      const newUrl = e.target.value;
+                      const det = detectProvider(newUrl);
+                      const patch: Partial<Provider> = { baseUrl: newUrl };
+                      if (det && det.format !== selected.format) patch.format = det.format;
+                      // URL change invalidates any previous test result — user must retest
+                      patch.supportsWebSearch = false;
+                      patch.webSearchStrategy = null;
+                      patch.webSearchTestedAt = undefined;
+                      handleUpdate(selected.id, patch);
                     }}
                     className="w-full bg-transparent border border-claude-border rounded-[8px] px-3 py-2 text-[14px] text-claude-text outline-none focus:border-[#387ee0]/60 transition-colors placeholder:text-claude-textSecondary/40 font-mono"
                   />
@@ -673,6 +724,72 @@ const ProviderSettings: React.FC = () => {
                     ))}
                   </div>
                 </div>
+
+                {/* Web search capability — determined solely by the probe result */}
+                {(() => {
+                  const state = webSearchTestState[selected.id];
+                  const isTesting = state === 'testing';
+                  const hasTested = !!selected.webSearchTestedAt;
+                  const supported = selected.supportsWebSearch === true;
+                  const strategy = selected.webSearchStrategy;
+                  const testedAt = selected.webSearchTestedAt ? new Date(selected.webSearchTestedAt).toLocaleString() : null;
+                  return (
+                    <div>
+                      <label className="text-[12px] text-claude-textSecondary mb-1.5 block font-medium flex items-center gap-1.5">
+                        <Globe size={12} /> 网页搜索能力
+                      </label>
+                      <div className={`rounded-[10px] border p-3 flex items-start gap-3 transition-colors ${
+                        isTesting ? 'border-[#387ee0]/40 bg-[#387ee0]/[0.06]' :
+                        supported ? 'border-[#387ee0]/40 bg-[#387ee0]/[0.04]' :
+                        hasTested ? 'border-claude-border/60 bg-claude-hover/30' :
+                        'border-claude-border/60'
+                      }`}>
+                        <div className="flex-shrink-0 mt-0.5">
+                          {isTesting ? (
+                            <RefreshCw size={16} className="text-[#387ee0] animate-spin" />
+                          ) : supported ? (
+                            <Check size={16} className="text-[#387ee0]" strokeWidth={2.5} />
+                          ) : hasTested ? (
+                            <X size={16} className="text-claude-textSecondary/60" />
+                          ) : (
+                            <Globe size={16} className="text-claude-textSecondary/50" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className={`text-[12.5px] font-medium mb-0.5 ${isTesting || supported ? 'text-claude-text' : 'text-claude-textSecondary'}`}>
+                            {isTesting ? '正在测试网页搜索能力...' :
+                             supported ? '已验证支持网页搜索' :
+                             hasTested ? '此供应商不支持网页搜索' :
+                             '尚未测试'}
+                          </div>
+                          <div className="text-[11px] text-claude-textSecondary/80 leading-relaxed">
+                            {isTesting ? 'Anthropic 格式会启动一个临时 engine 跑真实对话，耗时约 30-90 秒；OpenAI 格式约 10 秒' :
+                             supported ? (
+                               <>
+                                 策略：<span className="font-mono text-claude-text">{strategy || '—'}</span>
+                                 {testedAt && <span className="ml-2 opacity-60">· {testedAt}</span>}
+                               </>
+                             ) :
+                             hasTested ? (
+                               <>
+                                 {selected.webSearchTestReason || '探测未返回有效搜索结果'}
+                                 <div className="mt-0.5 opacity-70">对话中模型请求的 web_search 工具会被自动剥除，不会虚假搜索</div>
+                               </>
+                             ) :
+                             '新导入的供应商默认不启用网页搜索。点击右侧"测试"按钮验证。'}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleTestWebSearch(selected.id)}
+                          disabled={isTesting || !selected.apiKey || !selected.baseUrl}
+                          className="flex-shrink-0 px-3 py-1.5 text-[11.5px] font-medium rounded-lg border border-claude-border/60 text-claude-textSecondary hover:text-claude-text hover:bg-claude-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          {isTesting ? '测试中...' : hasTested ? '重新测试' : '测试'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Models */}
                 <div>

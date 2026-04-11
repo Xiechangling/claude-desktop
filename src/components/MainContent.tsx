@@ -3529,18 +3529,18 @@ const MainContent = ({ onNewChat, resetKey, tunerConfig, onOpenDocument, onArtif
                   )}
                   {/* Blue research badge next to + button when enabled */}
                   {researchMode && (
-                    <div className="relative ml-1 group">
-                      <div className="flex items-center bg-[#DBEAFE] dark:bg-[#1E3A5F] rounded-lg overflow-hidden">
+                    <div className="group/research relative ml-1 flex items-center bg-[#DBEAFE] dark:bg-[#1E3A5F] rounded-lg p-1.5">
+                      <IconResearch size={16} className="text-[#2E7CF6] flex-shrink-0" />
+                      <span className="inline-flex items-center overflow-hidden w-0 group-hover/research:w-[18px] transition-[width] duration-150 ease-out">
                         <button
                           onClick={toggleResearchMode}
-                          className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#BFDBFE] dark:hover:bg-[#2A4A75] transition-colors"
-                          title="Research mode — click X to disable"
+                          className="ml-1 flex-shrink-0 flex items-center justify-center hover:opacity-70 transition-opacity"
+                          aria-label="Disable research mode"
                         >
-                          <IconResearch size={16} className="text-[#2E7CF6]" />
-                          <X size={12} className="text-[#2E7CF6] opacity-0 group-hover:opacity-100 transition-opacity" />
+                          <X size={14} className="text-[#2E7CF6]" />
                         </button>
-                      </div>
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-[#2a2a2a] text-white dark:bg-[#e8e8e8] dark:text-[#1a1a1a] rounded-md text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                      </span>
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2 py-1 bg-[#2a2a2a] text-white dark:bg-[#e8e8e8] dark:text-[#1a1a1a] rounded-md text-[11px] whitespace-nowrap opacity-0 group-hover/research:opacity-100 pointer-events-none transition-opacity">
                         Research mode
                       </div>
                     </div>
@@ -3872,18 +3872,18 @@ const MainContent = ({ onNewChat, resetKey, tunerConfig, onOpenDocument, onArtif
                     )}
                     {/* Blue research badge next to + button when enabled */}
                     {researchMode && (
-                      <div className="relative ml-1 group">
-                        <div className="flex items-center bg-[#DBEAFE] dark:bg-[#1E3A5F] rounded-lg overflow-hidden">
+                      <div className="group/research relative ml-1 flex items-center bg-[#DBEAFE] dark:bg-[#1E3A5F] rounded-lg p-1.5">
+                        <IconResearch size={16} className="text-[#2E7CF6] flex-shrink-0" />
+                        <span className="inline-flex items-center overflow-hidden w-0 group-hover/research:w-[18px] transition-[width] duration-150 ease-out">
                           <button
                             onClick={toggleResearchMode}
-                            className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-[#BFDBFE] dark:hover:bg-[#2A4A75] transition-colors"
-                            title="Research mode — click X to disable"
+                            className="ml-1 flex-shrink-0 flex items-center justify-center hover:opacity-70 transition-opacity"
+                            aria-label="Disable research mode"
                           >
-                            <IconResearch size={16} className="text-[#2E7CF6]" />
-                            <X size={12} className="text-[#2E7CF6] opacity-0 group-hover:opacity-100 transition-opacity" />
+                            <X size={14} className="text-[#2E7CF6]" />
                           </button>
-                        </div>
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-[#2a2a2a] text-white dark:bg-[#e8e8e8] dark:text-[#1a1a1a] rounded-md text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity">
+                        </span>
+                        <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2 py-1 bg-[#2a2a2a] text-white dark:bg-[#e8e8e8] dark:text-[#1a1a1a] rounded-md text-[11px] whitespace-nowrap opacity-0 group-hover/research:opacity-100 pointer-events-none transition-opacity">
                           Research mode
                         </div>
                       </div>

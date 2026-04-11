@@ -54,6 +54,26 @@ function hasThinkingVariant(_modelId: string): boolean {
   return true;
 }
 
+// Turn raw model ids / names into friendly labels.
+// - claude-opus-4-6 → "Opus 4.6", claude-haiku-4-5-20251001 → "Haiku 4.5"
+// - GLM-5 → "GLM 5", Deepseek-V3.2 → "Deepseek V3.2" (hyphens become spaces)
+// - Strips provider/org prefix (e.g. "Pro/zai-org/GLM-5" → "GLM 5")
+function prettifyModelName(name?: string, id?: string): string {
+  for (const candidate of [id, name]) {
+    if (!candidate) continue;
+    const m = candidate.match(/(opus|sonnet|haiku)-(\d+)-(\d+)/i);
+    if (m) {
+      const tier = m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+      return `${tier} ${m[2]}.${m[3]}`;
+    }
+  }
+  const raw = name || id || '';
+  if (!raw) return 'Model';
+  const lastSlash = raw.lastIndexOf('/');
+  const trimmed = lastSlash >= 0 ? raw.slice(lastSlash + 1) : raw;
+  return trimmed.replace(/-/g, ' ');
+}
+
 interface ModelSelectorProps {
   currentModelString: string;
   models: SelectableModel[];
@@ -76,18 +96,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const currentBase = stripThinking(currentModelString);
   const thinking = isThinking(currentModelString);
   const currentModel = models.find(m => m && m.id === currentBase);
-  // Strip provider/org prefix from model names (e.g. "Pro/zai-org/GLM-5" → "GLM-5")
-  const stripPrefix = (name: string) => {
-    const lastSlash = name.lastIndexOf('/');
-    return lastSlash >= 0 ? name.slice(lastSlash + 1) : name;
-  };
-  const currentLabel = currentModel ? stripPrefix(currentModel.name) : (() => {
-    const id = currentBase || '';
-    if (id.includes('opus')) return 'Opus 4.6';
-    if (id.includes('sonnet')) return 'Sonnet 4.6';
-    if (id.includes('haiku')) return 'Haiku 4.5';
-    return stripPrefix(id) || 'Model';
-  })();
+  const currentLabel = prettifyModelName(currentModel?.name, currentModel?.id || currentBase);
 
   // Split models into main tiers and extra
   const mainModels = models.filter(m => m && m.tier !== 'extra');
@@ -143,7 +152,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         className={`w-full px-4 ${m.description ? 'py-2.5' : 'py-2'} flex items-center justify-between text-left ${disabled ? 'opacity-45 cursor-not-allowed' : 'hover:bg-claude-hover cursor-pointer'}`}
       >
         <div className="flex-1 min-w-0">
-          <div className="text-[14.5px] font-[500] text-claude-text truncate">{stripPrefix(m.name)}</div>
+          <div className="text-[14.5px] font-[500] text-claude-text truncate">{prettifyModelName(m.name, m.id)}</div>
           {m.description && <div className="text-[12.5px] text-claude-textSecondary mt-0.5">{m.description}</div>}
         </div>
         {active && <Check size={18} className="text-[#3b82f6] ml-2 shrink-0" />}
