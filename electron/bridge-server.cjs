@@ -3830,6 +3830,135 @@ You have the following skills available. When a user's request matches a skill's
 
     // ===== Code Mode API =====
     const codeSessions = new Map();
+    const codeEngineProcesses = new Map(); // sessionId -> { child, restartCount, logStream }
+
+    // Start Engine process for Code mode
+    function startCodeEngineProcess(sessionId, workingDirectory) {
+        const logDir = path.join(os.homedir(), '.claude', 'logs');
+        if (!fs.existsSync(logDir)) {
+            fs.mkdirSync(logDir, { recursive: true });
+        }
+        const logPath = path.join(logDir, `engine-code-${sessionId}.log`);
+        const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+
+        const cliArgs = [
+            '--preload', enginePreload,
+            '--env-file=' + engineEnv,
+            engineCli,
+            '--input-format', 'stream-json',
+            '--output-format', 'stream-json',
+            '--verbose',
+            '--include-partial-messages',
+            '--permission-mode', 'bypassPermissions',
+            '--add-dir', workingDirectory
+        ];
+
+        const envVars = Object.assign({}, process.env);
+        if (gitBashPath && !envVars.CLAUDE_CODE_GIT_BASH_PATH) {
+            envVars.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
+        }
+        if (!envVars.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS) {
+            envVars.CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS = '80000';
+        }
+
+        console.log('[Code] Starting Engine process for session:', sessionId);
+        console.log('[Code] Working directory:', workingDirectory);
+        console.log('[Code] Log file:', logPath);
+
+        const child = spawn(bunExePath, cliArgs, {
+            cwd: workingDirectory,
+            env: envVars,
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        const processInfo = {
+            child,
+            restartCount: 0,
+            logStream,
+            sessionId,
+            workingDirectory,
+            startTime: Date.now()
+        };
+
+        codeEngineProcesses.set(sessionId, processInfo);
+
+        // Log stdout
+        child.stdout.on('data', (data) => {
+            const text = data.toString();
+            logStream.write(`[STDOUT] ${text}`);
+        });
+
+        // Log stderr
+        child.stderr.on('data', (data) => {
+            const text = data.toString();
+            logStream.write(`[STDERR] ${text}`);
+            console.error('[Code Engine stderr]', sessionId, ':', text.slice(0, 200));
+        });
+
+        // Handle process exit
+        child.on('exit', (code, signal) => {
+            console.log('[Code] Engine process exited:', sessionId, 'code:', code, 'signal:', signal);
+            logStream.write(`[EXIT] Process exited with code ${code}, signal ${signal}\n`);
+
+            const session = codeSessions.get(sessionId);
+            if (session && processInfo.restartCount < 3) {
+                // Auto-restart on crash (max 3 times)
+                console.log('[Code] Auto-restarting engine (attempt', processInfo.restartCount + 1, ')');
+                logStream.write(`[RESTART] Attempt ${processInfo.restartCount + 1}\n`);
+                processInfo.restartCount++;
+
+                setTimeout(() => {
+                    if (codeSessions.has(sessionId)) {
+                        startCodeEngineProcess(sessionId, workingDirectory);
+                    }
+                }, 1000);
+            } else {
+                // Max retries reached or session deleted
+                codeEngineProcesses.delete(sessionId);
+                logStream.end();
+                if (session) {
+                    session.status = 'failed';
+                }
+            }
+        });
+
+        // Handle process error
+        child.on('error', (err) => {
+            console.error('[Code] Engine process error:', sessionId, err.message);
+            logStream.write(`[ERROR] ${err.message}\n`);
+        });
+
+        // Handle successful spawn
+        child.on('spawn', () => {
+            console.log('[Code] Engine process spawned:', sessionId, 'pid:', child.pid);
+            logStream.write(`[SPAWN] Process started with PID ${child.pid}\n`);
+        });
+
+        return processInfo;
+    }
+
+    // Stop Engine process for Code mode
+    function stopCodeEngineProcess(sessionId) {
+        const processInfo = codeEngineProcesses.get(sessionId);
+        if (!processInfo) return;
+
+        console.log('[Code] Stopping Engine process:', sessionId);
+        processInfo.logStream.write('[STOP] Process terminated by user\n');
+
+        try {
+            processInfo.child.kill('SIGTERM');
+            setTimeout(() => {
+                if (processInfo.child.exitCode === null) {
+                    processInfo.child.kill('SIGKILL');
+                }
+            }, 5000);
+        } catch (err) {
+            console.error('[Code] Error stopping process:', err.message);
+        }
+
+        processInfo.logStream.end();
+        codeEngineProcesses.delete(sessionId);
+    }
 
     // Create Code session
     server.post('/api/code/sessions', (req, res) => {
@@ -3847,13 +3976,22 @@ You have the following skills available. When a user's request matches a skill's
                 id: sessionId,
                 type,
                 workingDirectory,
-                status: 'active',
+                status: 'starting',
                 createdAt: new Date().toISOString(),
                 lastActiveAt: new Date().toISOString(),
             };
 
             codeSessions.set(sessionId, session);
             console.log('[Code] Session created:', sessionId, 'workspace:', workingDirectory);
+
+            // Start Engine process
+            try {
+                startCodeEngineProcess(sessionId, workingDirectory);
+                session.status = 'active';
+            } catch (err) {
+                console.error('[Code] Failed to start engine:', err);
+                session.status = 'failed';
+            }
 
             res.json({
                 sessionId: session.id,
@@ -3873,12 +4011,36 @@ You have the following skills available. When a user's request matches a skill's
         if (!session) {
             return res.status(404).json({ error: 'Session not found' });
         }
-        res.json(session);
+
+        // Add process status
+        const processInfo = codeEngineProcesses.get(req.params.id);
+        const enrichedSession = {
+            ...session,
+            processStatus: processInfo ? {
+                pid: processInfo.child.pid,
+                running: processInfo.child.exitCode === null,
+                restartCount: processInfo.restartCount,
+                uptime: Date.now() - processInfo.startTime
+            } : null
+        };
+
+        res.json(enrichedSession);
     });
 
     // List all Code sessions
     server.get('/api/code/sessions', (req, res) => {
-        const sessions = Array.from(codeSessions.values());
+        const sessions = Array.from(codeSessions.values()).map(session => {
+            const processInfo = codeEngineProcesses.get(session.id);
+            return {
+                ...session,
+                processStatus: processInfo ? {
+                    pid: processInfo.child.pid,
+                    running: processInfo.child.exitCode === null,
+                    restartCount: processInfo.restartCount,
+                    uptime: Date.now() - processInfo.startTime
+                } : null
+            };
+        });
         res.json({ sessions });
     });
 
@@ -3889,11 +4051,108 @@ You have the following skills available. When a user's request matches a skill's
             return res.status(404).json({ error: 'Session not found' });
         }
 
-        // TODO: Kill Engine process if running
+        // Stop Engine process
+        stopCodeEngineProcess(req.params.id);
         codeSessions.delete(req.params.id);
         console.log('[Code] Session deleted:', req.params.id);
 
         res.json({ success: true });
+    });
+
+    // Send message to Code session (SSE streaming)
+    server.post('/api/code/sessions/:id/messages', async (req, res) => {
+        const sessionId = req.params.id;
+        const { message } = req.body;
+
+        const session = codeSessions.get(sessionId);
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        const processInfo = codeEngineProcesses.get(sessionId);
+        if (!processInfo || !processInfo.child || processInfo.child.exitCode !== null) {
+            return res.status(503).json({ error: 'Engine process not running' });
+        }
+
+        console.log('[Code] Sending message to session:', sessionId);
+
+        // Set up SSE
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        const sendSSE = (data) => {
+            try {
+                res.write('data: ' + JSON.stringify(data) + '\n\n');
+            } catch (err) {
+                console.error('[Code] SSE write error:', err);
+            }
+        };
+
+        // Buffer for stdout
+        let stdoutBuffer = '';
+
+        const handleStdoutData = (chunk) => {
+            stdoutBuffer += chunk.toString('utf8');
+            const lines = stdoutBuffer.split('\n');
+            stdoutBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const event = JSON.parse(line);
+                    sendSSE(event);
+                } catch (err) {
+                    // Not JSON, might be plain text
+                    console.log('[Code] Non-JSON output:', line.slice(0, 100));
+                }
+            }
+        };
+
+        const handleStderrData = (chunk) => {
+            const text = chunk.toString('utf8');
+            console.error('[Code] Engine stderr:', text.slice(0, 200));
+        };
+
+        const handleExit = (code) => {
+            console.log('[Code] Engine exited during message processing, code:', code);
+            sendSSE({ type: 'error', error: 'Engine process exited unexpectedly' });
+            cleanup();
+            res.end();
+        };
+
+        const cleanup = () => {
+            processInfo.child.stdout.off('data', handleStdoutData);
+            processInfo.child.stderr.off('data', handleStderrData);
+            processInfo.child.off('exit', handleExit);
+        };
+
+        // Attach listeners
+        processInfo.child.stdout.on('data', handleStdoutData);
+        processInfo.child.stderr.on('data', handleStderrData);
+        processInfo.child.once('exit', handleExit);
+
+        // Handle client disconnect
+        req.on('close', () => {
+            console.log('[Code] Client disconnected');
+            cleanup();
+        });
+
+        // Send message to engine via stdin
+        try {
+            const input = JSON.stringify({
+                type: 'user_message',
+                content: message,
+                timestamp: Date.now()
+            });
+            processInfo.child.stdin.write(input + '\n');
+            session.lastActiveAt = new Date().toISOString();
+        } catch (err) {
+            console.error('[Code] Failed to write to stdin:', err);
+            sendSSE({ type: 'error', error: 'Failed to send message to engine' });
+            cleanup();
+            res.end();
+        }
     });
 
     // ===== Cowork Mode API =====
