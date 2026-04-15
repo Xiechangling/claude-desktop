@@ -4157,8 +4157,151 @@ You have the following skills available. When a user's request matches a skill's
 
     // ===== Cowork Mode API =====
     const coworkSessions = new Map();
+    const coworkEngineProcesses = new Map();
 
-    // Select folder for Cowork
+    // Helper: Count files in directory (non-recursive, skip hidden files and node_modules)
+    function countFiles(dirPath) {
+        try {
+            let count = 0;
+            const items = fs.readdirSync(dirPath);
+            for (const item of items) {
+                if (item.startsWith('.') || item === 'node_modules') continue;
+                const fullPath = path.join(dirPath, item);
+                const stats = fs.statSync(fullPath);
+                if (stats.isFile()) {
+                    count++;
+                } else if (stats.isDirectory()) {
+                    count += countFiles(fullPath);
+                }
+            }
+            return count;
+        } catch (err) {
+            console.error('[Cowork] Error counting files:', err);
+            return 0;
+        }
+    }
+
+    // Helper: Start Cowork Engine process
+    function startCoworkEngineProcess(folderId, folderPath) {
+        const logDir = path.join(os.homedir(), '.claude', 'logs');
+        if (!fs.existsSync(logDir)) {
+            fs.mkdirSync(logDir, { recursive: true });
+        }
+
+        const logPath = path.join(logDir, `engine-cowork-${folderId}.log`);
+        const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+
+        logStream.write(`\n=== Cowork Engine Started at ${new Date().toISOString()} ===\n`);
+        logStream.write(`Folder: ${folderPath}\n`);
+        logStream.write(`Session ID: ${folderId}\n\n`);
+
+        const cliArgs = [
+            '--preload', enginePreload,
+            '--env-file=' + engineEnv,
+            engineCli,
+            '--cowork',
+            '--input-format', 'stream-json',
+            '--output-format', 'stream-json',
+            '--verbose',
+            '--include-partial-messages',
+            '--permission-mode', 'bypassPermissions',
+            '--add-dir', folderPath
+        ];
+
+        const envVars = { ...process.env };
+        envVars.CLAUDE_CODE_USE_COWORK_PLUGINS = '1';
+
+        // Add git-bash to PATH on Windows
+        if (process.platform === 'win32') {
+            const gitBashPath = 'C:\\Program Files\\Git\\bin';
+            if (fs.existsSync(gitBashPath)) {
+                envVars.PATH = gitBashPath + path.delimiter + envVars.PATH;
+            }
+        }
+
+        console.log('[Cowork] Starting Engine process for folder:', folderId);
+        console.log('[Cowork] Working directory:', folderPath);
+        console.log('[Cowork] Using Cowork plugins directory');
+
+        const child = spawn(bunExePath, cliArgs, {
+            cwd: folderPath,
+            env: envVars,
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        const processInfo = {
+            child,
+            folderId,
+            folderPath,
+            restartCount: 0,
+            logStream,
+            startTime: Date.now()
+        };
+
+        coworkEngineProcesses.set(folderId, processInfo);
+
+        child.stdout.on('data', (data) => {
+            logStream.write('[STDOUT] ' + data.toString());
+        });
+
+        child.stderr.on('data', (data) => {
+            const text = data.toString();
+            logStream.write('[STDERR] ' + text);
+            console.error('[Cowork] Engine stderr:', text.slice(0, 200));
+        });
+
+        child.on('error', (err) => {
+            console.error('[Cowork] Engine process error:', err);
+            logStream.write(`[ERROR] ${err.message}\n`);
+        });
+
+        child.on('spawn', () => {
+            console.log('[Cowork] Engine process spawned, PID:', child.pid);
+            logStream.write(`[INFO] Process spawned with PID ${child.pid}\n`);
+        });
+
+        child.on('exit', (code, signal) => {
+            console.log('[Cowork] Engine process exited, code:', code, 'signal:', signal);
+            logStream.write(`[EXIT] Process exited with code ${code}, signal ${signal}\n`);
+
+            // Auto-restart on crash (max 3 times)
+            if (code !== 0 && processInfo.restartCount < 3) {
+                processInfo.restartCount++;
+                console.log(`[Cowork] Restarting Engine (attempt ${processInfo.restartCount}/3)...`);
+                logStream.write(`[RESTART] Attempt ${processInfo.restartCount}/3\n`);
+                setTimeout(() => {
+                    if (coworkEngineProcesses.has(folderId)) {
+                        startCoworkEngineProcess(folderId, folderPath);
+                    }
+                }, 1000);
+            } else {
+                logStream.end();
+                coworkEngineProcesses.delete(folderId);
+            }
+        });
+
+        return processInfo;
+    }
+
+    // Helper: Stop Cowork Engine process
+    function stopCoworkEngineProcess(folderId) {
+        const processInfo = coworkEngineProcesses.get(folderId);
+        if (!processInfo) return;
+
+        console.log('[Cowork] Stopping Engine process for folder:', folderId);
+        processInfo.logStream.write(`[STOP] Process stopped at ${new Date().toISOString()}\n`);
+        processInfo.logStream.end();
+
+        try {
+            processInfo.child.kill('SIGTERM');
+        } catch (err) {
+            console.error('[Cowork] Error killing process:', err);
+        }
+
+        coworkEngineProcesses.delete(folderId);
+    }
+
+    // POST /api/cowork/folders - Create folder session and start Engine
     server.post('/api/cowork/folders', (req, res) => {
         try {
             const { path: folderPath } = req.body;
@@ -4172,20 +4315,33 @@ You have the following skills available. When a user's request matches a skill's
             }
 
             const folderId = uuidv4();
+            const fileCount = countFiles(folderPath);
+
             const session = {
                 id: folderId,
                 path: folderPath,
-                status: 'active',
+                fileCount,
+                status: 'starting',
                 createdAt: new Date().toISOString(),
                 lastActiveAt: new Date().toISOString(),
             };
 
             coworkSessions.set(folderId, session);
-            console.log('[Cowork] Folder selected:', folderId, 'path:', folderPath);
+            console.log('[Cowork] Folder selected:', folderId, 'path:', folderPath, 'files:', fileCount);
+
+            // Start Engine process
+            try {
+                startCoworkEngineProcess(folderId, folderPath);
+                session.status = 'active';
+            } catch (err) {
+                console.error('[Cowork] Failed to start engine:', err);
+                session.status = 'failed';
+            }
 
             res.json({
                 folderId: session.id,
                 path: session.path,
+                fileCount: session.fileCount,
                 status: session.status,
                 createdAt: session.createdAt,
             });
@@ -4195,33 +4351,203 @@ You have the following skills available. When a user's request matches a skill's
         }
     });
 
-    // Get folder info
+    // GET /api/cowork/folders/:id - Get folder session details
     server.get('/api/cowork/folders/:id', (req, res) => {
         const session = coworkSessions.get(req.params.id);
         if (!session) {
             return res.status(404).json({ error: 'Folder not found' });
         }
-        res.json(session);
+
+        // Add process status
+        const processInfo = coworkEngineProcesses.get(req.params.id);
+        const enrichedSession = {
+            ...session,
+            processStatus: processInfo ? {
+                pid: processInfo.child.pid,
+                running: processInfo.child.exitCode === null,
+                restartCount: processInfo.restartCount,
+                uptime: Date.now() - processInfo.startTime
+            } : null
+        };
+
+        res.json(enrichedSession);
     });
 
-    // List all Cowork sessions
-    server.get('/api/cowork/sessions', (req, res) => {
-        const sessions = Array.from(coworkSessions.values());
-        res.json({ sessions });
-    });
-
-    // Delete Cowork session
-    server.delete('/api/cowork/sessions/:id', (req, res) => {
+    // DELETE /api/cowork/folders/:id - Delete folder session
+    server.delete('/api/cowork/folders/:id', (req, res) => {
         const session = coworkSessions.get(req.params.id);
         if (!session) {
-            return res.status(404).json({ error: 'Session not found' });
+            return res.status(404).json({ error: 'Folder not found' });
         }
 
-        // TODO: Kill Engine process if running
+        // Stop Engine process
+        stopCoworkEngineProcess(req.params.id);
         coworkSessions.delete(req.params.id);
-        console.log('[Cowork] Session deleted:', req.params.id);
+        console.log('[Cowork] Folder session deleted:', req.params.id);
 
         res.json({ success: true });
+    });
+
+    // GET /api/cowork/folders/:id/tasks - Get task list (placeholder)
+    server.get('/api/cowork/folders/:id/tasks', (req, res) => {
+        const session = coworkSessions.get(req.params.id);
+        if (!session) {
+            return res.status(404).json({ error: 'Folder not found' });
+        }
+
+        // TODO: Get tasks from Engine
+        // For now, return empty array
+        res.json({ tasks: [] });
+    });
+
+    // GET /api/cowork/folders/:id/files - Get file tree
+    server.get('/api/cowork/folders/:id/files', (req, res) => {
+        const session = coworkSessions.get(req.params.id);
+        if (!session) {
+            return res.status(404).json({ error: 'Folder not found' });
+        }
+
+        try {
+            const files = scanFolderTree(session.path);
+            res.json({ files });
+        } catch (err) {
+            console.error('[Cowork] Error scanning files:', err);
+            res.status(500).json({ error: 'Failed to scan files' });
+        }
+    });
+
+    // Helper: Scan folder tree (recursive)
+    function scanFolderTree(dirPath, maxDepth = 3, currentDepth = 0) {
+        if (currentDepth >= maxDepth) return [];
+
+        try {
+            const items = fs.readdirSync(dirPath);
+            const result = [];
+
+            for (const item of items) {
+                // Skip hidden files and node_modules
+                if (item.startsWith('.') || item === 'node_modules') continue;
+
+                const fullPath = path.join(dirPath, item);
+                try {
+                    const stats = fs.statSync(fullPath);
+                    const node = {
+                        name: item,
+                        path: fullPath,
+                        type: stats.isDirectory() ? 'directory' : 'file'
+                    };
+
+                    if (stats.isDirectory()) {
+                        node.children = scanFolderTree(fullPath, maxDepth, currentDepth + 1);
+                    }
+
+                    result.push(node);
+                } catch (err) {
+                    // Skip files we can't access
+                    continue;
+                }
+            }
+
+            return result;
+        } catch (err) {
+            console.error('[Cowork] Error scanning directory:', err);
+            return [];
+        }
+    }
+
+    // POST /api/cowork/folders/:id/messages - Send message (placeholder)
+    server.post('/api/cowork/folders/:id/messages', async (req, res) => {
+        const folderId = req.params.id;
+        const { message } = req.body;
+
+        const session = coworkSessions.get(folderId);
+        if (!session) {
+            return res.status(404).json({ error: 'Folder not found' });
+        }
+
+        const processInfo = coworkEngineProcesses.get(folderId);
+        if (!processInfo || !processInfo.child || processInfo.child.exitCode !== null) {
+            return res.status(503).json({ error: 'Engine process not running' });
+        }
+
+        console.log('[Cowork] Sending message to folder:', folderId);
+
+        // Set up SSE
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        const sendSSE = (data) => {
+            try {
+                res.write('data: ' + JSON.stringify(data) + '\n\n');
+            } catch (err) {
+                console.error('[Cowork] SSE write error:', err);
+            }
+        };
+
+        // Buffer for stdout
+        let stdoutBuffer = '';
+
+        const handleStdoutData = (chunk) => {
+            stdoutBuffer += chunk.toString('utf8');
+            const lines = stdoutBuffer.split('\n');
+            stdoutBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                try {
+                    const event = JSON.parse(line);
+                    sendSSE(event);
+                } catch (err) {
+                    console.log('[Cowork] Non-JSON output:', line.slice(0, 100));
+                }
+            }
+        };
+
+        const handleStderrData = (chunk) => {
+            const text = chunk.toString('utf8');
+            console.error('[Cowork] Engine stderr:', text.slice(0, 200));
+        };
+
+        const handleExit = (code) => {
+            console.log('[Cowork] Engine exited during message processing, code:', code);
+            sendSSE({ type: 'error', error: 'Engine process exited unexpectedly' });
+            cleanup();
+            res.end();
+        };
+
+        const cleanup = () => {
+            processInfo.child.stdout.off('data', handleStdoutData);
+            processInfo.child.stderr.off('data', handleStderrData);
+            processInfo.child.off('exit', handleExit);
+        };
+
+        // Attach listeners
+        processInfo.child.stdout.on('data', handleStdoutData);
+        processInfo.child.stderr.on('data', handleStderrData);
+        processInfo.child.once('exit', handleExit);
+
+        // Handle client disconnect
+        req.on('close', () => {
+            console.log('[Cowork] Client disconnected');
+            cleanup();
+        });
+
+        // Send message to engine via stdin
+        try {
+            const input = JSON.stringify({
+                type: 'user_message',
+                content: message,
+                timestamp: Date.now()
+            });
+            processInfo.child.stdin.write(input + '\n');
+            session.lastActiveAt = new Date().toISOString();
+        } catch (err) {
+            console.error('[Cowork] Failed to write to stdin:', err);
+            sendSSE({ type: 'error', error: 'Failed to send message to engine' });
+            cleanup();
+            res.end();
+        }
     });
 
     return server;
