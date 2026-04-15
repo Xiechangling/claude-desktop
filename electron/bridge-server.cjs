@@ -3828,6 +3828,143 @@ You have the following skills available. When a user's request matches a skill's
     });
 
 
+    // ===== Code Mode API =====
+    const codeSessions = new Map();
+
+    // Create Code session
+    server.post('/api/code/sessions', (req, res) => {
+        try {
+            const { type, workingDirectory } = req.body;
+            if (type !== 'local') {
+                return res.status(400).json({ error: 'Only "local" type is supported in this version' });
+            }
+            if (!workingDirectory || !fs.existsSync(workingDirectory)) {
+                return res.status(400).json({ error: 'Invalid working directory' });
+            }
+
+            const sessionId = uuidv4();
+            const session = {
+                id: sessionId,
+                type,
+                workingDirectory,
+                status: 'active',
+                createdAt: new Date().toISOString(),
+                lastActiveAt: new Date().toISOString(),
+            };
+
+            codeSessions.set(sessionId, session);
+            console.log('[Code] Session created:', sessionId, 'workspace:', workingDirectory);
+
+            res.json({
+                sessionId: session.id,
+                status: session.status,
+                workingDirectory: session.workingDirectory,
+                createdAt: session.createdAt,
+            });
+        } catch (err) {
+            console.error('[Code] Create session error:', err);
+            res.status(500).json({ error: err.message || 'Failed to create session' });
+        }
+    });
+
+    // Get Code session details
+    server.get('/api/code/sessions/:id', (req, res) => {
+        const session = codeSessions.get(req.params.id);
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+        res.json(session);
+    });
+
+    // List all Code sessions
+    server.get('/api/code/sessions', (req, res) => {
+        const sessions = Array.from(codeSessions.values());
+        res.json({ sessions });
+    });
+
+    // Delete Code session
+    server.delete('/api/code/sessions/:id', (req, res) => {
+        const session = codeSessions.get(req.params.id);
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        // TODO: Kill Engine process if running
+        codeSessions.delete(req.params.id);
+        console.log('[Code] Session deleted:', req.params.id);
+
+        res.json({ success: true });
+    });
+
+    // ===== Cowork Mode API =====
+    const coworkSessions = new Map();
+
+    // Select folder for Cowork
+    server.post('/api/cowork/folders', (req, res) => {
+        try {
+            const { path: folderPath } = req.body;
+            if (!folderPath || !fs.existsSync(folderPath)) {
+                return res.status(400).json({ error: 'Invalid folder path' });
+            }
+
+            const stats = fs.statSync(folderPath);
+            if (!stats.isDirectory()) {
+                return res.status(400).json({ error: 'Path is not a directory' });
+            }
+
+            const folderId = uuidv4();
+            const session = {
+                id: folderId,
+                path: folderPath,
+                status: 'active',
+                createdAt: new Date().toISOString(),
+                lastActiveAt: new Date().toISOString(),
+            };
+
+            coworkSessions.set(folderId, session);
+            console.log('[Cowork] Folder selected:', folderId, 'path:', folderPath);
+
+            res.json({
+                folderId: session.id,
+                path: session.path,
+                status: session.status,
+                createdAt: session.createdAt,
+            });
+        } catch (err) {
+            console.error('[Cowork] Select folder error:', err);
+            res.status(500).json({ error: err.message || 'Failed to select folder' });
+        }
+    });
+
+    // Get folder info
+    server.get('/api/cowork/folders/:id', (req, res) => {
+        const session = coworkSessions.get(req.params.id);
+        if (!session) {
+            return res.status(404).json({ error: 'Folder not found' });
+        }
+        res.json(session);
+    });
+
+    // List all Cowork sessions
+    server.get('/api/cowork/sessions', (req, res) => {
+        const sessions = Array.from(coworkSessions.values());
+        res.json({ sessions });
+    });
+
+    // Delete Cowork session
+    server.delete('/api/cowork/sessions/:id', (req, res) => {
+        const session = coworkSessions.get(req.params.id);
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        // TODO: Kill Engine process if running
+        coworkSessions.delete(req.params.id);
+        console.log('[Cowork] Session deleted:', req.params.id);
+
+        res.json({ success: true });
+    });
+
     return server;
 }
 

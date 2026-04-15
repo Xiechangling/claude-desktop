@@ -26,6 +26,8 @@ import AdminAnnouncements from './components/admin/AdminAnnouncements';
 import ChatsPage from './components/ChatsPage';
 import CustomizePage from './components/CustomizePage';
 import ProjectsPage from './components/ProjectsPage';
+import CodePage from './components/CodePage';
+import CoworkPage from './components/CoworkPage';
 
 const Tooltip = ({ children, text, shortcut }: { children: React.ReactNode; text: string; shortcut?: string }) => {
   const [show, setShow] = useState(false);
@@ -247,6 +249,12 @@ const ChatHeader = ({
 };
 
 const Layout = () => {
+  // Mode state: 'chat' | 'cowork' | 'code'
+  const [currentMode, setCurrentMode] = useState<'chat' | 'cowork' | 'code'>(() => {
+    const saved = localStorage.getItem('current_mode');
+    return (saved === 'chat' || saved === 'cowork' || saved === 'code') ? saved : 'chat';
+  });
+
   const [unreadAnnouncements, setUnreadAnnouncements] = useState<Array<{
     id: number;
     title: string;
@@ -317,6 +325,46 @@ const Layout = () => {
 
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Persist mode to localStorage
+  useEffect(() => {
+    localStorage.setItem('current_mode', currentMode);
+  }, [currentMode]);
+
+  // Keyboard shortcuts for mode switching (Ctrl+1/2/3)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '1') {
+          e.preventDefault();
+          setCurrentMode('chat');
+          navigate('/');
+        } else if (e.key === '2') {
+          e.preventDefault();
+          setCurrentMode('cowork');
+          navigate('/cowork');
+        } else if (e.key === '3') {
+          e.preventDefault();
+          setCurrentMode('code');
+          navigate('/code');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [navigate]);
+
+  // Handle mode button clicks
+  const handleModeSwitch = useCallback((mode: 'chat' | 'cowork' | 'code') => {
+    setCurrentMode(mode);
+    if (mode === 'chat') {
+      navigate('/');
+    } else if (mode === 'cowork') {
+      navigate('/cowork');
+    } else if (mode === 'code') {
+      navigate('/code');
+    }
+  }, [navigate]);
 
   // Navigation history for back/forward buttons
   const [navHistory, setNavHistory] = useState<string[]>([location.pathname + location.search + location.hash]);
@@ -640,17 +688,53 @@ const Layout = () => {
             style={{ pointerEvents: 'auto', WebkitAppRegion: 'no-drag', backgroundColor: 'var(--bg-mode-tabs)' } as React.CSSProperties}
           >
             <Tooltip text="Chat" shortcut="Ctrl+1">
-              <button className="px-3.5 py-1 text-[13px] font-medium rounded-[10px] text-claude-text shadow-sm transition-colors" style={{ backgroundColor: 'var(--bg-mode-tab-active)', fontFamily: 'Inter, system-ui, -apple-system, sans-serif', letterSpacing: '0.01em' }}>
+              <button
+                onClick={() => handleModeSwitch('chat')}
+                className={`px-3.5 py-1 text-[13px] font-medium rounded-[10px] transition-all duration-200 ${
+                  currentMode === 'chat'
+                    ? 'text-claude-text shadow-sm'
+                    : 'text-claude-textSecondary hover:text-claude-text'
+                }`}
+                style={{
+                  backgroundColor: currentMode === 'chat' ? 'var(--bg-mode-tab-active)' : 'transparent',
+                  fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+                  letterSpacing: '0.01em'
+                }}
+              >
                 Chat
               </button>
             </Tooltip>
             <Tooltip text="Cowork" shortcut="Ctrl+2">
-              <button className="px-3.5 py-1 text-[13px] font-medium rounded-[10px] text-claude-textSecondary hover:text-claude-text transition-colors" style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif', letterSpacing: '0.01em' }}>
+              <button
+                onClick={() => handleModeSwitch('cowork')}
+                className={`px-3.5 py-1 text-[13px] font-medium rounded-[10px] transition-all duration-200 ${
+                  currentMode === 'cowork'
+                    ? 'text-claude-text shadow-sm'
+                    : 'text-claude-textSecondary hover:text-claude-text'
+                }`}
+                style={{
+                  backgroundColor: currentMode === 'cowork' ? 'var(--bg-mode-tab-active)' : 'transparent',
+                  fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+                  letterSpacing: '0.01em'
+                }}
+              >
                 Cowork
               </button>
             </Tooltip>
             <Tooltip text="Code" shortcut="Ctrl+3">
-              <button className="px-3.5 py-1 text-[13px] font-medium rounded-[10px] text-claude-textSecondary hover:text-claude-text transition-colors" style={{ fontFamily: 'Inter, system-ui, -apple-system, sans-serif', letterSpacing: '0.01em' }}>
+              <button
+                onClick={() => handleModeSwitch('code')}
+                className={`px-3.5 py-1 text-[13px] font-medium rounded-[10px] transition-all duration-200 ${
+                  currentMode === 'code'
+                    ? 'text-claude-text shadow-sm'
+                    : 'text-claude-textSecondary hover:text-claude-text'
+                }`}
+                style={{
+                  backgroundColor: currentMode === 'code' ? 'var(--bg-mode-tab-active)' : 'transparent',
+                  fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+                  letterSpacing: '0.01em'
+                }}
+              >
                 Code
               </button>
             </Tooltip>
@@ -724,6 +808,14 @@ const Layout = () => {
                   handleNewChat();
                   window.location.hash = '#/';
                 }} />
+              ) : location.pathname === '/cowork' ? (
+                <div className="w-full h-full animate-fadeIn">
+                  <CoworkPage />
+                </div>
+              ) : location.pathname === '/code' ? (
+                <div className="w-full h-full animate-fadeIn">
+                  <CodePage />
+                </div>
               ) : (
                 <MainContent
                   onNewChat={refreshSidebar}
@@ -832,6 +924,8 @@ const App = () => {
         <Route path="/customize" element={<Layout />} />
         <Route path="/projects" element={<Layout />} />
         <Route path="/artifacts" element={<Layout />} />
+        <Route path="/cowork" element={<Layout />} />
+        <Route path="/code" element={<Layout />} />
         <Route path="/chat/:id" element={<Layout />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
