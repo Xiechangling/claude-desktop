@@ -54,8 +54,12 @@ try {
 }
 
 function initServer(mainWindow) {
-    // Initialize database
-    initDatabase();
+    // Initialize database (optional - gracefully handle failure)
+    try {
+        initDatabase();
+    } catch (err) {
+        console.warn('[Database] Failed to initialize, persistence disabled:', err.message);
+    }
 
     const server = express();
     server.use(cors());

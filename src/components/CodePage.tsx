@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Plus, ChevronDown, Folder, Clock, X, ChevronRight, ChevronLeft, Send, Loader2, FileText, Check, XCircle } from 'lucide-react';
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { useToast } from './Toast';
+import ContextSelector, { ContextItem } from './ContextSelector';
+import SlashCommandPanel, { SlashCommand } from './SlashCommandPanel';
+import AutoAcceptToggle from './AutoAcceptToggle';
 
 interface CodeSession {
   id: string;
@@ -59,6 +62,14 @@ const CodePage: React.FC = () => {
   const [rightPanelView, setRightPanelView] = useState<'diffs' | 'files'>('diffs');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // New state for redesigned features
+  const [selectedContexts, setSelectedContexts] = useState<ContextItem[]>([
+    { id: 'local', type: 'local', label: 'Local' }
+  ]);
+  const [isCommandPanelOpen, setIsCommandPanelOpen] = useState(false);
+  const [commandPanelPosition, setCommandPanelPosition] = useState({ top: 0, left: 0 });
+  const [autoAcceptEdits, setAutoAcceptEdits] = useState(false);
 
   // Load sessions on mount
   useEffect(() => {
@@ -285,6 +296,43 @@ const CodePage: React.FC = () => {
     }
   };
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setInputValue(value);
+
+    // Check if user typed '/' at the start
+    if (value === '/' && !isCommandPanelOpen) {
+      // Calculate position for command panel
+      const textarea = textareaRef.current;
+      if (textarea) {
+        const rect = textarea.getBoundingClientRect();
+        setCommandPanelPosition({
+          top: rect.top - 300, // Position above textarea
+          left: rect.left
+        });
+        setIsCommandPanelOpen(true);
+      }
+    } else if (!value.startsWith('/') && isCommandPanelOpen) {
+      setIsCommandPanelOpen(false);
+    }
+  };
+
+  const handleSelectCommand = (command: SlashCommand) => {
+    setInputValue(command.name + ' ');
+    setIsCommandPanelOpen(false);
+    textareaRef.current?.focus();
+  };
+
+  // Auto-accept diffs when enabled
+  useEffect(() => {
+    if (autoAcceptEdits && diffs.length > 0) {
+      const pendingDiffs = diffs.filter(d => d.status === 'pending');
+      pendingDiffs.forEach(diff => {
+        handleAcceptDiff(diff.id);
+      });
+    }
+  }, [diffs, autoAcceptEdits]);
+
   const handleAcceptDiff = async (diffId: string) => {
     if (!currentSessionId) return;
     try {
@@ -445,7 +493,7 @@ const CodePage: React.FC = () => {
           <>
             {/* Chat Header */}
             <div className="px-6 py-4 border-b border-claude-border">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 mb-3">
                 <Folder className="w-5 h-5 text-claude-textSecondary" />
                 <div>
                   <div className="text-sm font-medium text-claude-text">
@@ -456,6 +504,13 @@ const CodePage: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Context Selector */}
+              <ContextSelector
+                selectedContexts={selectedContexts}
+                onContextsChange={setSelectedContexts}
+                workingDirectory={currentSession.workingDirectory}
+              />
             </div>
 
             {/* Messages Area */}
@@ -517,13 +572,21 @@ const CodePage: React.FC = () => {
             {/* Input Area */}
             <div className="border-t border-claude-border p-4">
               <div className="max-w-3xl mx-auto">
+                {/* Auto Accept Toggle */}
+                <div className="mb-3">
+                  <AutoAcceptToggle
+                    enabled={autoAcceptEdits}
+                    onChange={setAutoAcceptEdits}
+                  />
+                </div>
+
                 <div className="relative">
                   <textarea
                     ref={textareaRef}
                     value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
+                    onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
-                    placeholder="Send a message..."
+                    placeholder="Type / for commands"
                     className="w-full px-4 py-3 pr-12 bg-claude-input border border-claude-border rounded-lg text-claude-text resize-none focus:outline-none focus:border-claude-accent"
                     rows={3}
                     disabled={isSending}
@@ -542,6 +605,14 @@ const CodePage: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            {/* Slash Command Panel */}
+            <SlashCommandPanel
+              isOpen={isCommandPanelOpen}
+              onClose={() => setIsCommandPanelOpen(false)}
+              onSelectCommand={handleSelectCommand}
+              position={commandPanelPosition}
+            />
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">

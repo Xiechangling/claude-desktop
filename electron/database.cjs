@@ -51,7 +51,12 @@ function initDatabase() {
 
 function getDatabase() {
     if (!db) {
-        initDatabase();
+        try {
+            initDatabase();
+        } catch (err) {
+            console.warn('[Database] Failed to initialize:', err.message);
+            return null;
+        }
     }
     return db;
 }
@@ -74,6 +79,7 @@ function cleanupOldSessions() {
 // Code Sessions
 function saveCodeSession(session) {
     const db = getDatabase();
+    if (!db) return;
     const stmt = db.prepare(`
         INSERT OR REPLACE INTO code_sessions (id, type, workingDirectory, status, createdAt, lastActiveAt)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -91,24 +97,28 @@ function saveCodeSession(session) {
 
 function getCodeSession(id) {
     const db = getDatabase();
+    if (!db) return null;
     const stmt = db.prepare('SELECT * FROM code_sessions WHERE id = ?');
     return stmt.get(id);
 }
 
 function getAllCodeSessions() {
     const db = getDatabase();
+    if (!db) return [];
     const stmt = db.prepare('SELECT * FROM code_sessions ORDER BY lastActiveAt DESC');
     return stmt.all();
 }
 
 function deleteCodeSession(id) {
     const db = getDatabase();
+    if (!db) return;
     const stmt = db.prepare('DELETE FROM code_sessions WHERE id = ?');
     stmt.run(id);
 }
 
 function updateCodeSessionActivity(id) {
     const db = getDatabase();
+    if (!db) return;
     const stmt = db.prepare('UPDATE code_sessions SET lastActiveAt = ? WHERE id = ?');
     stmt.run(new Date().toISOString(), id);
 }
@@ -116,6 +126,7 @@ function updateCodeSessionActivity(id) {
 // Cowork Folders
 function saveCoworkFolder(folder) {
     const db = getDatabase();
+    if (!db) return;
     const stmt = db.prepare(`
         INSERT OR REPLACE INTO cowork_folders (id, path, fileCount, status, createdAt, lastActiveAt)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -133,24 +144,28 @@ function saveCoworkFolder(folder) {
 
 function getCoworkFolder(id) {
     const db = getDatabase();
+    if (!db) return null;
     const stmt = db.prepare('SELECT * FROM cowork_folders WHERE id = ?');
     return stmt.get(id);
 }
 
 function getAllCoworkFolders() {
     const db = getDatabase();
+    if (!db) return [];
     const stmt = db.prepare('SELECT * FROM cowork_folders ORDER BY lastActiveAt DESC');
     return stmt.all();
 }
 
 function deleteCoworkFolder(id) {
     const db = getDatabase();
+    if (!db) return;
     const stmt = db.prepare('DELETE FROM cowork_folders WHERE id = ?');
     stmt.run(id);
 }
 
 function updateCoworkFolderActivity(id) {
     const db = getDatabase();
+    if (!db) return;
     const stmt = db.prepare('UPDATE cowork_folders SET lastActiveAt = ? WHERE id = ?');
     stmt.run(new Date().toISOString(), id);
 }
