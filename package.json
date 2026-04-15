@@ -35,7 +35,14 @@
       {
         "from": "engine/src",
         "to": "engine/src",
-        "filter": ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.json", "**/*.md", "**/*.txt"]
+        "filter": [
+          "**/*.ts",
+          "**/*.tsx",
+          "**/*.js",
+          "**/*.json",
+          "**/*.md",
+          "**/*.txt"
+        ]
       },
       {
         "from": "engine/bin",
@@ -113,6 +120,7 @@
     "@fontsource/spectral": "^5.2.8",
     "@remix-run/router": "1.15.3",
     "archiver": "^7.0.1",
+    "better-sqlite3": "^12.9.0",
     "core-util-is": "^1.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
@@ -127,6 +135,7 @@
     "multer": "^2.1.1",
     "process-nextick-args": "^2.0.1",
     "react": "^19.2.4",
+    "react-diff-viewer-continued": "^4.2.0",
     "react-dom": "^19.2.4",
     "react-markdown": "9.0.1",
     "react-router-dom": "6.22.3",
@@ -141,6 +150,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/katex": "^0.16.8",
     "@types/mermaid": "^9.1.0",
     "@types/node": "^22.14.0",

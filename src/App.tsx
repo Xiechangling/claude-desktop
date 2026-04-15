@@ -28,6 +28,8 @@ import CustomizePage from './components/CustomizePage';
 import ProjectsPage from './components/ProjectsPage';
 import CodePage from './components/CodePage';
 import CoworkPage from './components/CoworkPage';
+import ErrorBoundary from './components/ErrorBoundary';
+import Toast, { useToast } from './components/Toast';
 
 const Tooltip = ({ children, text, shortcut }: { children: React.ReactNode; text: string; shortcut?: string }) => {
   const [show, setShow] = useState(false);
@@ -249,6 +251,9 @@ const ChatHeader = ({
 };
 
 const Layout = () => {
+  // Toast notifications
+  const { toasts, removeToast } = useToast();
+
   // Mode state: 'chat' | 'cowork' | 'code'
   const [currentMode, setCurrentMode] = useState<'chat' | 'cowork' | 'code'>(() => {
     const saved = localStorage.getItem('current_mode');
@@ -623,6 +628,7 @@ const Layout = () => {
 
   return (
     <>
+      <Toast toasts={toasts} onRemove={removeToast} />
       <div className="relative flex w-full h-screen overflow-hidden bg-claude-bg font-sans antialiased">
         {/* Custom Solid Title Bar (Unified Full Width) */}
         <div
@@ -907,29 +913,31 @@ const Layout = () => {
 
 const App = () => {
   return (
-    <HashRouter>
-      <Routes>
-        <Route path="/login" element={<Auth />} />
-        <Route path="/admin" element={<AdminLayout />}>
-          <Route index element={<AdminDashboard />} />
-          <Route path="keys" element={<AdminKeyPool />} />
-          <Route path="models" element={<AdminModels />} />
-          <Route path="users" element={<AdminUsers />} />
-          <Route path="announcements" element={<AdminAnnouncements />} />
-          <Route path="plans" element={<AdminPlans />} />
-          <Route path="redemption" element={<AdminRedemption />} />
-        </Route>
-        <Route path="/" element={<Layout />} />
-        <Route path="/chats" element={<Layout />} />
-        <Route path="/customize" element={<Layout />} />
-        <Route path="/projects" element={<Layout />} />
-        <Route path="/artifacts" element={<Layout />} />
-        <Route path="/cowork" element={<Layout />} />
-        <Route path="/code" element={<Layout />} />
-        <Route path="/chat/:id" element={<Layout />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </HashRouter>
+    <ErrorBoundary>
+      <HashRouter>
+        <Routes>
+          <Route path="/login" element={<Auth />} />
+          <Route path="/admin" element={<AdminLayout />}>
+            <Route index element={<AdminDashboard />} />
+            <Route path="keys" element={<AdminKeyPool />} />
+            <Route path="models" element={<AdminModels />} />
+            <Route path="users" element={<AdminUsers />} />
+            <Route path="announcements" element={<AdminAnnouncements />} />
+            <Route path="plans" element={<AdminPlans />} />
+            <Route path="redemption" element={<AdminRedemption />} />
+          </Route>
+          <Route path="/" element={<Layout />} />
+          <Route path="/chats" element={<Layout />} />
+          <Route path="/customize" element={<Layout />} />
+          <Route path="/projects" element={<Layout />} />
+          <Route path="/artifacts" element={<Layout />} />
+          <Route path="/cowork" element={<Layout />} />
+          <Route path="/code" element={<Layout />} />
+          <Route path="/chat/:id" element={<Layout />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </HashRouter>
+    </ErrorBoundary>
   );
 };
 

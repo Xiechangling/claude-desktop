@@ -8,6 +8,17 @@ const { v4: uuidv4 } = require('uuid');
 const { app } = require('electron');
 const { TOOL_DEFINITIONS, executeTool } = require('./tools.cjs');
 const { runResearchPipeline } = require('./research-orchestrator.cjs');
+const {
+    initDatabase,
+    saveCodeSession,
+    getAllCodeSessions,
+    deleteCodeSession,
+    updateCodeSessionActivity,
+    saveCoworkFolder,
+    getAllCoworkFolders,
+    deleteCoworkFolder,
+    updateCoworkFolderActivity
+} = require('./database.cjs');
 
 // Heuristic: when research_mode is enabled, decide whether THIS message
 // should actually trigger the research pipeline. Greetings, very short
@@ -43,6 +54,9 @@ try {
 }
 
 function initServer(mainWindow) {
+    // Initialize database
+    initDatabase();
+
     const server = express();
     server.use(cors());
     server.use(express.json({ limit: '5mb' }));
@@ -3831,6 +3845,7 @@ You have the following skills available. When a user's request matches a skill's
     // ===== Code Mode API =====
     const codeSessions = new Map();
     const codeEngineProcesses = new Map(); // sessionId -> { child, restartCount, logStream }
+    const codeDiffs = new Map(); // sessionId -> [{ id, filePath, oldContent, newContent, status }]
 
     // Start Engine process for Code mode
     function startCodeEngineProcess(sessionId, workingDirectory) {
@@ -3982,15 +3997,21 @@ You have the following skills available. When a user's request matches a skill's
             };
 
             codeSessions.set(sessionId, session);
+
+            // Save to database
+            saveCodeSession(session);
+
             console.log('[Code] Session created:', sessionId, 'workspace:', workingDirectory);
 
             // Start Engine process
             try {
                 startCodeEngineProcess(sessionId, workingDirectory);
                 session.status = 'active';
+                saveCodeSession(session); // Update status in DB
             } catch (err) {
                 console.error('[Code] Failed to start engine:', err);
                 session.status = 'failed';
+                saveCodeSession(session); // Update status in DB
             }
 
             res.json({
@@ -4029,6 +4050,16 @@ You have the following skills available. When a user's request matches a skill's
 
     // List all Code sessions
     server.get('/api/code/sessions', (req, res) => {
+        // Load from database and merge with in-memory sessions
+        const dbSessions = getAllCodeSessions();
+
+        // Restore sessions to memory if not already there
+        for (const dbSession of dbSessions) {
+            if (!codeSessions.has(dbSession.id)) {
+                codeSessions.set(dbSession.id, dbSession);
+            }
+        }
+
         const sessions = Array.from(codeSessions.values()).map(session => {
             const processInfo = codeEngineProcesses.get(session.id);
             return {
@@ -4051,11 +4082,13 @@ You have the following skills available. When a user's request matches a skill's
             return res.status(404).json({ error: 'Session not found' });
         }
 
-        // Stop Engine process
         stopCodeEngineProcess(req.params.id);
         codeSessions.delete(req.params.id);
-        console.log('[Code] Session deleted:', req.params.id);
 
+        // Delete from database
+        deleteCodeSession(req.params.id);
+
+        console.log('[Code] Session deleted:', req.params.id);
         res.json({ success: true });
     });
 
@@ -4101,6 +4134,58 @@ You have the following skills available. When a user's request matches a skill's
                 if (!line.trim()) continue;
                 try {
                     const event = JSON.parse(line);
+
+                    // Capture Write/Edit tool calls for Diff review
+                    if (event.type === 'tool_use' && (event.name === 'Write' || event.name === 'Edit')) {
+                        const filePath = event.input?.file_path;
+                        if (filePath) {
+                            // Read old content if file exists
+                            let oldContent = '';
+                            const fullPath = path.isAbsolute(filePath) ? filePath : path.join(session.workingDirectory, filePath);
+                            try {
+                                if (fs.existsSync(fullPath)) {
+                                    oldContent = fs.readFileSync(fullPath, 'utf8');
+                                }
+                            } catch (err) {
+                                console.error('[Code] Failed to read old content:', err);
+                            }
+
+                            // Get new content from tool input
+                            const newContent = event.input?.content || event.input?.new_string || '';
+
+                            // Create diff entry
+                            const diffId = uuidv4();
+                            const diff = {
+                                id: diffId,
+                                filePath: filePath,
+                                oldContent: oldContent,
+                                newContent: newContent,
+                                status: 'pending',
+                                toolName: event.name,
+                                toolUseId: event.tool_use_id || event.id,
+                                timestamp: Date.now()
+                            };
+
+                            // Store diff
+                            if (!codeDiffs.has(sessionId)) {
+                                codeDiffs.set(sessionId, []);
+                            }
+                            codeDiffs.get(sessionId).push(diff);
+
+                            // Send diff_generated event to frontend
+                            sendSSE({
+                                type: 'diff_generated',
+                                diff: {
+                                    id: diffId,
+                                    filePath: filePath,
+                                    status: 'pending'
+                                }
+                            });
+
+                            console.log('[Code] Diff generated:', diffId, filePath);
+                        }
+                    }
+
                     sendSSE(event);
                 } catch (err) {
                     // Not JSON, might be plain text
@@ -4153,6 +4238,82 @@ You have the following skills available. When a user's request matches a skill's
             cleanup();
             res.end();
         }
+    });
+
+    // Get diffs for a Code session
+    server.get('/api/code/sessions/:id/diffs', (req, res) => {
+        const sessionId = req.params.id;
+        const diffs = codeDiffs.get(sessionId) || [];
+        res.json({ diffs });
+    });
+
+    // Accept a diff (apply the change)
+    server.post('/api/code/sessions/:id/diffs/:diffId/accept', (req, res) => {
+        const { id: sessionId, diffId } = req.params;
+        const diffs = codeDiffs.get(sessionId);
+
+        if (!diffs) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        const diff = diffs.find(d => d.id === diffId);
+        if (!diff) {
+            return res.status(404).json({ error: 'Diff not found' });
+        }
+
+        if (diff.status !== 'pending') {
+            return res.status(400).json({ error: 'Diff already processed' });
+        }
+
+        try {
+            const session = codeSessions.get(sessionId);
+            if (!session) {
+                return res.status(404).json({ error: 'Session not found' });
+            }
+
+            // Write the new content to file
+            const fullPath = path.isAbsolute(diff.filePath)
+                ? diff.filePath
+                : path.join(session.workingDirectory, diff.filePath);
+
+            // Ensure directory exists
+            const dir = path.dirname(fullPath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+
+            fs.writeFileSync(fullPath, diff.newContent, 'utf8');
+            diff.status = 'accepted';
+
+            console.log('[Code] Diff accepted:', diffId, diff.filePath);
+            res.json({ success: true, diff });
+        } catch (err) {
+            console.error('[Code] Failed to accept diff:', err);
+            res.status(500).json({ error: 'Failed to apply changes: ' + err.message });
+        }
+    });
+
+    // Reject a diff (discard the change)
+    server.post('/api/code/sessions/:id/diffs/:diffId/reject', (req, res) => {
+        const { id: sessionId, diffId } = req.params;
+        const diffs = codeDiffs.get(sessionId);
+
+        if (!diffs) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        const diff = diffs.find(d => d.id === diffId);
+        if (!diff) {
+            return res.status(404).json({ error: 'Diff not found' });
+        }
+
+        if (diff.status !== 'pending') {
+            return res.status(400).json({ error: 'Diff already processed' });
+        }
+
+        diff.status = 'rejected';
+        console.log('[Code] Diff rejected:', diffId, diff.filePath);
+        res.json({ success: true, diff });
     });
 
     // ===== Cowork Mode API =====
@@ -4327,15 +4488,21 @@ You have the following skills available. When a user's request matches a skill's
             };
 
             coworkSessions.set(folderId, session);
+
+            // Save to database
+            saveCoworkFolder(session);
+
             console.log('[Cowork] Folder selected:', folderId, 'path:', folderPath, 'files:', fileCount);
 
             // Start Engine process
             try {
                 startCoworkEngineProcess(folderId, folderPath);
                 session.status = 'active';
+                saveCoworkFolder(session); // Update status in DB
             } catch (err) {
                 console.error('[Cowork] Failed to start engine:', err);
                 session.status = 'failed';
+                saveCoworkFolder(session); // Update status in DB
             }
 
             res.json({
@@ -4383,8 +4550,11 @@ You have the following skills available. When a user's request matches a skill's
         // Stop Engine process
         stopCoworkEngineProcess(req.params.id);
         coworkSessions.delete(req.params.id);
-        console.log('[Cowork] Folder session deleted:', req.params.id);
 
+        // Delete from database
+        deleteCoworkFolder(req.params.id);
+
+        console.log('[Cowork] Folder session deleted:', req.params.id);
         res.json({ success: true });
     });
 

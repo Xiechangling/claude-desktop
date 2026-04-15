@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, ChevronDown, Folder, Clock, X, ChevronRight, ChevronLeft, Send, Loader2 } from 'lucide-react';
+import { Plus, ChevronDown, Folder, Clock, X, ChevronRight, ChevronLeft, Send, Loader2, FileText, Check, XCircle } from 'lucide-react';
+import ReactDiffViewer from 'react-diff-viewer-continued';
+import { useToast } from './Toast';
 
 interface CodeSession {
   id: string;
@@ -32,7 +34,18 @@ interface ToolCall {
   status: 'pending' | 'success' | 'error';
 }
 
+interface Diff {
+  id: string;
+  filePath: string;
+  oldContent: string;
+  newContent: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  toolName: string;
+  timestamp: number;
+}
+
 const CodePage: React.FC = () => {
+  const toast = useToast();
   const [environment, setEnvironment] = useState<'local' | 'remote' | 'ssh'>('local');
   const [sessions, setSessions] = useState<CodeSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -41,6 +54,9 @@ const CodePage: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [diffs, setDiffs] = useState<Diff[]>([]);
+  const [selectedDiffId, setSelectedDiffId] = useState<string | null>(null);
+  const [rightPanelView, setRightPanelView] = useState<'diffs' | 'files'>('diffs');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -57,7 +73,23 @@ const CodePage: React.FC = () => {
   // Clear messages when session changes
   useEffect(() => {
     setMessages([]);
+    setDiffs([]);
+    setSelectedDiffId(null);
+    if (currentSessionId) {
+      loadDiffs();
+    }
   }, [currentSessionId]);
+
+  const loadDiffs = async () => {
+    if (!currentSessionId) return;
+    try {
+      const response = await fetch(`http://127.0.0.1:30080/api/code/sessions/${currentSessionId}/diffs`);
+      const data = await response.json();
+      setDiffs(data.diffs || []);
+    } catch (err) {
+      console.error('Failed to load diffs:', err);
+    }
+  };
 
   const loadSessions = async () => {
     try {
@@ -66,6 +98,7 @@ const CodePage: React.FC = () => {
       setSessions(data.sessions || []);
     } catch (err) {
       console.error('Failed to load sessions:', err);
+      toast.error('Failed to load sessions');
     }
   };
 
@@ -97,9 +130,10 @@ const CodePage: React.FC = () => {
       const newSession = await response.json();
       await loadSessions();
       setCurrentSessionId(newSession.sessionId);
+      toast.success('Session created successfully');
     } catch (err) {
       console.error('Failed to create session:', err);
-      alert('Failed to create session: ' + (err as Error).message);
+      toast.error('Failed to create session: ' + (err as Error).message);
     } finally {
       setIsCreatingSession(false);
     }
@@ -116,8 +150,10 @@ const CodePage: React.FC = () => {
       if (currentSessionId === sessionId) {
         setCurrentSessionId(null);
       }
+      toast.success('Session deleted');
     } catch (err) {
       console.error('Failed to delete session:', err);
+      toast.error('Failed to delete session');
     }
   };
 
@@ -229,6 +265,11 @@ const CodePage: React.FC = () => {
             )
           };
 
+        case 'diff_generated':
+          // Reload diffs when a new diff is generated
+          loadDiffs();
+          break;
+
         case 'error':
           return { ...msg, content: msg.content + '\n\nError: ' + event.error };
       }
@@ -241,6 +282,54 @@ const CodePage: React.FC = () => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
+    }
+  };
+
+  const handleAcceptDiff = async (diffId: string) => {
+    if (!currentSessionId) return;
+    try {
+      const response = await fetch(`http://127.0.0.1:30080/api/code/sessions/${currentSessionId}/diffs/${diffId}/accept`, {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        throw new Error('Failed to accept diff');
+      }
+      await loadDiffs();
+      toast.success('Changes applied successfully');
+      // Move to next pending diff
+      const pendingDiffs = diffs.filter(d => d.status === 'pending' && d.id !== diffId);
+      if (pendingDiffs.length > 0) {
+        setSelectedDiffId(pendingDiffs[0].id);
+      } else {
+        setSelectedDiffId(null);
+      }
+    } catch (err) {
+      console.error('Failed to accept diff:', err);
+      toast.error('Failed to apply changes: ' + (err as Error).message);
+    }
+  };
+
+  const handleRejectDiff = async (diffId: string) => {
+    if (!currentSessionId) return;
+    try {
+      const response = await fetch(`http://127.0.0.1:30080/api/code/sessions/${currentSessionId}/diffs/${diffId}/reject`, {
+        method: 'POST'
+      });
+      if (!response.ok) {
+        throw new Error('Failed to reject diff');
+      }
+      await loadDiffs();
+      toast.info('Changes discarded');
+      // Move to next pending diff
+      const pendingDiffs = diffs.filter(d => d.status === 'pending' && d.id !== diffId);
+      if (pendingDiffs.length > 0) {
+        setSelectedDiffId(pendingDiffs[0].id);
+      } else {
+        setSelectedDiffId(null);
+      }
+    } catch (err) {
+      console.error('Failed to reject diff:', err);
+      toast.error('Failed to reject changes: ' + (err as Error).message);
     }
   };
 
@@ -471,7 +560,33 @@ const CodePage: React.FC = () => {
       {isRightPanelOpen && (
         <div className="w-[400px] border-l border-claude-border bg-claude-bg flex flex-col">
           <div className="px-4 py-3 border-b border-claude-border flex items-center justify-between">
-            <h3 className="text-sm font-medium text-claude-text">File Tree</h3>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setRightPanelView('diffs')}
+                className={`px-3 py-1 text-sm rounded transition-colors ${
+                  rightPanelView === 'diffs'
+                    ? 'bg-claude-accent text-white'
+                    : 'text-claude-textSecondary hover:bg-claude-hover'
+                }`}
+              >
+                Diffs
+                {diffs.filter(d => d.status === 'pending').length > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white text-xs rounded-full">
+                    {diffs.filter(d => d.status === 'pending').length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setRightPanelView('files')}
+                className={`px-3 py-1 text-sm rounded transition-colors ${
+                  rightPanelView === 'files'
+                    ? 'bg-claude-accent text-white'
+                    : 'text-claude-textSecondary hover:bg-claude-hover'
+                }`}
+              >
+                Files
+              </button>
+            </div>
             <button
               onClick={() => setIsRightPanelOpen(false)}
               className="p-1 hover:bg-claude-hover rounded transition-colors"
@@ -479,10 +594,117 @@ const CodePage: React.FC = () => {
               <ChevronRight className="w-4 h-4 text-claude-textSecondary" />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-4">
-            <div className="text-center text-claude-textSecondary text-sm py-8">
-              File Tree - Coming Soon
-            </div>
+
+          <div className="flex-1 overflow-y-auto">
+            {rightPanelView === 'diffs' ? (
+              <div className="flex flex-col h-full">
+                {diffs.length === 0 ? (
+                  <div className="flex-1 flex items-center justify-center p-4">
+                    <div className="text-center text-claude-textSecondary text-sm">
+                      No file changes yet
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {/* Diff List */}
+                    <div className="border-b border-claude-border">
+                      {diffs.map((diff) => (
+                        <div
+                          key={diff.id}
+                          onClick={() => setSelectedDiffId(diff.id)}
+                          className={`p-3 border-b border-claude-border cursor-pointer transition-colors ${
+                            selectedDiffId === diff.id
+                              ? 'bg-claude-accent/10'
+                              : 'hover:bg-claude-hover'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <FileText className="w-4 h-4 text-claude-textSecondary flex-shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium text-claude-text truncate">
+                                {diff.filePath.split(/[/\\]/).pop()}
+                              </div>
+                              <div className="text-xs text-claude-textSecondary truncate">
+                                {diff.filePath}
+                              </div>
+                              <div className="flex items-center gap-2 mt-1">
+                                {diff.status === 'pending' && (
+                                  <span className="text-xs px-2 py-0.5 bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 rounded">
+                                    Pending
+                                  </span>
+                                )}
+                                {diff.status === 'accepted' && (
+                                  <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-600 dark:text-green-400 rounded flex items-center gap-1">
+                                    <Check className="w-3 h-3" />
+                                    Accepted
+                                  </span>
+                                )}
+                                {diff.status === 'rejected' && (
+                                  <span className="text-xs px-2 py-0.5 bg-red-500/20 text-red-600 dark:text-red-400 rounded flex items-center gap-1">
+                                    <XCircle className="w-3 h-3" />
+                                    Rejected
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Diff Viewer */}
+                    {selectedDiffId && (() => {
+                      const selectedDiff = diffs.find(d => d.id === selectedDiffId);
+                      if (!selectedDiff) return null;
+
+                      return (
+                        <div className="flex-1 flex flex-col">
+                          <div className="p-3 border-b border-claude-border bg-claude-input">
+                            <div className="text-sm font-medium text-claude-text mb-2">
+                              {selectedDiff.filePath}
+                            </div>
+                            {selectedDiff.status === 'pending' && (
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleAcceptDiff(selectedDiff.id)}
+                                  className="flex-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded hover:bg-green-700 transition-colors flex items-center justify-center gap-1"
+                                >
+                                  <Check className="w-4 h-4" />
+                                  Accept
+                                </button>
+                                <button
+                                  onClick={() => handleRejectDiff(selectedDiff.id)}
+                                  className="flex-1 px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 transition-colors flex items-center justify-center gap-1"
+                                >
+                                  <XCircle className="w-4 h-4" />
+                                  Reject
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex-1 overflow-auto text-xs">
+                            <ReactDiffViewer
+                              oldValue={selectedDiff.oldContent}
+                              newValue={selectedDiff.newContent}
+                              splitView={false}
+                              useDarkTheme={document.documentElement.classList.contains('dark')}
+                              hideLineNumbers={false}
+                              showDiffOnly={false}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="p-4">
+                <div className="text-center text-claude-textSecondary text-sm py-8">
+                  File Tree - Coming Soon
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
