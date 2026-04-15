@@ -3978,6 +3978,16 @@ You have the following skills available. When a user's request matches a skill's
     // Create Code session
     server.post('/api/code/sessions', (req, res) => {
         try {
+            // SECURITY: Limit concurrent sessions to prevent resource exhaustion
+            const MAX_CONCURRENT_SESSIONS = 10;
+            if (codeSessions.size >= MAX_CONCURRENT_SESSIONS) {
+                return res.status(429).json({
+                    error: 'Maximum concurrent sessions reached. Please close some sessions first.',
+                    maxSessions: MAX_CONCURRENT_SESSIONS,
+                    currentSessions: codeSessions.size
+                });
+            }
+
             const { type, workingDirectory } = req.body;
             if (type !== 'local') {
                 return res.status(400).json({ error: 'Only "local" type is supported in this version' });
@@ -4096,6 +4106,26 @@ You have the following skills available. When a user's request matches a skill's
     server.post('/api/code/sessions/:id/messages', async (req, res) => {
         const sessionId = req.params.id;
         const { message } = req.body;
+
+        // SECURITY: Validate session ID format (UUID)
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sessionId)) {
+            return res.status(400).json({ error: 'Invalid session ID format' });
+        }
+
+        // SECURITY: Validate message input
+        if (!message || typeof message !== 'string') {
+            return res.status(400).json({ error: 'Invalid message format' });
+        }
+
+        // SECURITY: Limit message length to prevent DoS
+        const MAX_MESSAGE_LENGTH = 100000; // 100KB
+        if (message.length > MAX_MESSAGE_LENGTH) {
+            return res.status(413).json({
+                error: 'Message too large',
+                maxLength: MAX_MESSAGE_LENGTH,
+                receivedLength: message.length
+            });
+        }
 
         const session = codeSessions.get(sessionId);
         if (!session) {
@@ -4275,6 +4305,15 @@ You have the following skills available. When a user's request matches a skill's
             const fullPath = path.isAbsolute(diff.filePath)
                 ? diff.filePath
                 : path.join(session.workingDirectory, diff.filePath);
+
+            // SECURITY: Validate path is within workspace (prevent path traversal)
+            const normalizedPath = path.resolve(fullPath);
+            const normalizedWorkspace = path.resolve(session.workingDirectory);
+            if (!normalizedPath.startsWith(normalizedWorkspace + path.sep) &&
+                normalizedPath !== normalizedWorkspace) {
+                console.error('[Code] Path traversal attempt blocked:', diff.filePath);
+                return res.status(403).json({ error: 'Access denied: Path outside workspace' });
+            }
 
             // Ensure directory exists
             const dir = path.dirname(fullPath);
@@ -4465,6 +4504,16 @@ You have the following skills available. When a user's request matches a skill's
     // POST /api/cowork/folders - Create folder session and start Engine
     server.post('/api/cowork/folders', (req, res) => {
         try {
+            // SECURITY: Limit concurrent sessions to prevent resource exhaustion
+            const MAX_CONCURRENT_SESSIONS = 10;
+            if (coworkSessions.size >= MAX_CONCURRENT_SESSIONS) {
+                return res.status(429).json({
+                    error: 'Maximum concurrent sessions reached. Please close some sessions first.',
+                    maxSessions: MAX_CONCURRENT_SESSIONS,
+                    currentSessions: coworkSessions.size
+                });
+            }
+
             const { path: folderPath } = req.body;
             if (!folderPath || !fs.existsSync(folderPath)) {
                 return res.status(400).json({ error: 'Invalid folder path' });
@@ -4578,7 +4627,7 @@ You have the following skills available. When a user's request matches a skill's
         }
 
         try {
-            const files = scanFolderTree(session.path);
+            const files = scanFolderTree(session.path, session.path);
             res.json({ files });
         } catch (err) {
             console.error('[Cowork] Error scanning files:', err);
@@ -4587,7 +4636,7 @@ You have the following skills available. When a user's request matches a skill's
     });
 
     // Helper: Scan folder tree (recursive)
-    function scanFolderTree(dirPath, maxDepth = 3, currentDepth = 0) {
+    function scanFolderTree(dirPath, basePath, maxDepth = 3, currentDepth = 0) {
         if (currentDepth >= maxDepth) return [];
 
         try {
@@ -4599,6 +4648,15 @@ You have the following skills available. When a user's request matches a skill's
                 if (item.startsWith('.') || item === 'node_modules') continue;
 
                 const fullPath = path.join(dirPath, item);
+
+                // SECURITY: Validate path is within base folder (prevent symlink attacks)
+                const normalizedPath = path.resolve(fullPath);
+                const normalizedBase = path.resolve(basePath);
+                if (!normalizedPath.startsWith(normalizedBase + path.sep) &&
+                    normalizedPath !== normalizedBase) {
+                    console.warn('[Cowork] Skipping path outside base folder:', fullPath);
+                    continue;
+                }
                 try {
                     const stats = fs.statSync(fullPath);
                     const node = {
@@ -4608,7 +4666,7 @@ You have the following skills available. When a user's request matches a skill's
                     };
 
                     if (stats.isDirectory()) {
-                        node.children = scanFolderTree(fullPath, maxDepth, currentDepth + 1);
+                        node.children = scanFolderTree(fullPath, basePath, maxDepth, currentDepth + 1);
                     }
 
                     result.push(node);
@@ -4629,6 +4687,26 @@ You have the following skills available. When a user's request matches a skill's
     server.post('/api/cowork/folders/:id/messages', async (req, res) => {
         const folderId = req.params.id;
         const { message } = req.body;
+
+        // SECURITY: Validate folder ID format (UUID)
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(folderId)) {
+            return res.status(400).json({ error: 'Invalid folder ID format' });
+        }
+
+        // SECURITY: Validate message input
+        if (!message || typeof message !== 'string') {
+            return res.status(400).json({ error: 'Invalid message format' });
+        }
+
+        // SECURITY: Limit message length to prevent DoS
+        const MAX_MESSAGE_LENGTH = 100000; // 100KB
+        if (message.length > MAX_MESSAGE_LENGTH) {
+            return res.status(413).json({
+                error: 'Message too large',
+                maxLength: MAX_MESSAGE_LENGTH,
+                receivedLength: message.length
+            });
+        }
 
         const session = coworkSessions.get(folderId);
         if (!session) {
