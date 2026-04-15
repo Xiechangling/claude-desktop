@@ -4281,6 +4281,39 @@ You have the following skills available. When a user's request matches a skill's
         res.json({ diffs });
     });
 
+    // Get folders for a Code session (for context selector)
+    server.get('/api/code/sessions/:id/folders', (req, res) => {
+        const sessionId = req.params.id;
+        const session = codeSessions.get(sessionId);
+
+        if (!session) {
+            return res.status(404).json({ error: 'Session not found' });
+        }
+
+        try {
+            // Scan only first level directories
+            const items = fs.readdirSync(session.workingDirectory, { withFileTypes: true });
+            const folders = items
+                .filter(item => {
+                    // Only directories, skip hidden and node_modules
+                    return item.isDirectory() &&
+                           !item.name.startsWith('.') &&
+                           item.name !== 'node_modules';
+                })
+                .map((item, index) => ({
+                    id: `folder-${index}`,
+                    type: 'folder',
+                    label: item.name + '/',
+                    path: item.name
+                }));
+
+            res.json({ folders });
+        } catch (err) {
+            console.error('[Code] Error scanning folders:', err);
+            res.status(500).json({ error: 'Failed to scan folders' });
+        }
+    });
+
     // Accept a diff (apply the change)
     server.post('/api/code/sessions/:id/diffs/:diffId/accept', (req, res) => {
         const { id: sessionId, diffId } = req.params;

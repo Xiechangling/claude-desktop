@@ -3,7 +3,6 @@ import { Plus, ChevronDown, Folder, Clock, X, ChevronRight, ChevronLeft, Send, L
 import ReactDiffViewer from 'react-diff-viewer-continued';
 import { useToast } from './Toast';
 import ContextSelector, { ContextItem } from './ContextSelector';
-import SlashCommandPanel, { SlashCommand } from './SlashCommandPanel';
 import AutoAcceptToggle from './AutoAcceptToggle';
 
 interface CodeSession {
@@ -67,9 +66,10 @@ const CodePage: React.FC = () => {
   const [selectedContexts, setSelectedContexts] = useState<ContextItem[]>([
     { id: 'local', type: 'local', label: 'Local' }
   ]);
-  const [isCommandPanelOpen, setIsCommandPanelOpen] = useState(false);
-  const [commandPanelPosition, setCommandPanelPosition] = useState({ top: 0, left: 0 });
-  const [autoAcceptEdits, setAutoAcceptEdits] = useState(false);
+  const [autoAcceptEdits, setAutoAcceptEdits] = useState(() => {
+    const saved = localStorage.getItem('autoAcceptEdits');
+    return saved ? JSON.parse(saved) : false;
+  });
 
   // Load sessions on mount
   useEffect(() => {
@@ -297,40 +297,23 @@ const CodePage: React.FC = () => {
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setInputValue(value);
-
-    // Check if user typed '/' at the start
-    if (value === '/' && !isCommandPanelOpen) {
-      // Calculate position for command panel
-      const textarea = textareaRef.current;
-      if (textarea) {
-        const rect = textarea.getBoundingClientRect();
-        setCommandPanelPosition({
-          top: rect.top - 300, // Position above textarea
-          left: rect.left
-        });
-        setIsCommandPanelOpen(true);
-      }
-    } else if (!value.startsWith('/') && isCommandPanelOpen) {
-      setIsCommandPanelOpen(false);
-    }
+    setInputValue(e.target.value);
   };
 
-  const handleSelectCommand = (command: SlashCommand) => {
-    setInputValue(command.name + ' ');
-    setIsCommandPanelOpen(false);
-    textareaRef.current?.focus();
-  };
+  // Auto-accept diffs when enabled (sequential processing to avoid race conditions)
+  const processingDiffRef = useRef(false);
 
-  // Auto-accept diffs when enabled
   useEffect(() => {
-    if (autoAcceptEdits && diffs.length > 0) {
-      const pendingDiffs = diffs.filter(d => d.status === 'pending');
-      pendingDiffs.forEach(diff => {
-        handleAcceptDiff(diff.id);
-      });
-    }
+    if (!autoAcceptEdits || processingDiffRef.current) return;
+
+    const pendingDiffs = diffs.filter(d => d.status === 'pending');
+    if (pendingDiffs.length === 0) return;
+
+    // Process first pending diff
+    processingDiffRef.current = true;
+    handleAcceptDiff(pendingDiffs[0].id).finally(() => {
+      processingDiffRef.current = false;
+    });
   }, [diffs, autoAcceptEdits]);
 
   const handleAcceptDiff = async (diffId: string) => {
@@ -510,6 +493,7 @@ const CodePage: React.FC = () => {
                 selectedContexts={selectedContexts}
                 onContextsChange={setSelectedContexts}
                 workingDirectory={currentSession.workingDirectory}
+                sessionId={currentSessionId || undefined}
               />
             </div>
 
@@ -576,7 +560,10 @@ const CodePage: React.FC = () => {
                 <div className="mb-3">
                   <AutoAcceptToggle
                     enabled={autoAcceptEdits}
-                    onChange={setAutoAcceptEdits}
+                    onChange={(enabled) => {
+                      setAutoAcceptEdits(enabled);
+                      localStorage.setItem('autoAcceptEdits', JSON.stringify(enabled));
+                    }}
                   />
                 </div>
 
@@ -586,7 +573,7 @@ const CodePage: React.FC = () => {
                     value={inputValue}
                     onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
-                    placeholder="Type / for commands"
+                    placeholder="Type your message..."
                     className="w-full px-4 py-3 pr-12 bg-claude-input border border-claude-border rounded-lg text-claude-text resize-none focus:outline-none focus:border-claude-accent"
                     rows={3}
                     disabled={isSending}
@@ -605,14 +592,6 @@ const CodePage: React.FC = () => {
                 </div>
               </div>
             </div>
-
-            {/* Slash Command Panel */}
-            <SlashCommandPanel
-              isOpen={isCommandPanelOpen}
-              onClose={() => setIsCommandPanelOpen(false)}
-              onSelectCommand={handleSelectCommand}
-              position={commandPanelPosition}
-            />
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">

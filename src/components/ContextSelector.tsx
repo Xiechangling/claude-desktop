@@ -12,22 +12,32 @@ interface ContextSelectorProps {
   selectedContexts: ContextItem[];
   onContextsChange: (contexts: ContextItem[]) => void;
   workingDirectory?: string;
+  sessionId?: string;
 }
 
 const ContextSelector: React.FC<ContextSelectorProps> = ({
   selectedContexts,
   onContextsChange,
-  workingDirectory
+  workingDirectory,
+  sessionId
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [availableFolders, setAvailableFolders] = useState<ContextItem[]>([]);
+
+  // Load folders from API
+  useEffect(() => {
+    if (!sessionId) return;
+
+    fetch(`http://127.0.0.1:30080/api/code/sessions/${sessionId}/folders`)
+      .then(res => res.json())
+      .then(data => setAvailableFolders(data.folders || []))
+      .catch(err => console.error('Failed to load folders:', err));
+  }, [sessionId]);
 
   // Available context options
   const availableContexts: ContextItem[] = [
     { id: 'local', type: 'local', label: 'Local' },
-    ...(workingDirectory ? [
-      { id: 'folder-1', type: 'folder' as const, label: 'src/', path: 'src' },
-      { id: 'folder-2', type: 'folder' as const, label: 'components/', path: 'src/components' },
-    ] : []),
+    ...availableFolders
   ];
 
   const getIcon = (type: ContextItem['type']) => {
