@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Plus, ChevronDown, Folder, Clock, X, ChevronRight, ChevronLeft, Send, Loader2, FileText, Check, XCircle } from 'lucide-react';
 import { useToast } from './Toast';
 import ContextSelector, { ContextItem } from './ContextSelector';
-import AutoAcceptToggle from './AutoAcceptToggle';
+import PermissionModeSelect, { PermissionMode } from './PermissionModeSelect';
 
 interface CodeSession {
   id: string;
@@ -62,10 +62,14 @@ const CodePage: React.FC = () => {
   const [selectedContexts, setSelectedContexts] = useState<ContextItem[]>([
     { id: 'local', type: 'local', label: 'Local' }
   ]);
-  const [autoAcceptEdits, setAutoAcceptEdits] = useState(() => {
-    const saved = localStorage.getItem('autoAcceptEdits');
-    return saved ? JSON.parse(saved) : false;
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
+    const saved = localStorage.getItem('permissionMode');
+    return (saved as PermissionMode) || 'ask';
   });
+
+  useEffect(() => {
+    localStorage.setItem('permissionMode', permissionMode);
+  }, [permissionMode]);
 
   // Load sessions on mount
   useEffect(() => {
@@ -299,7 +303,7 @@ const CodePage: React.FC = () => {
   const processingDiffRef = useRef(false);
 
   useEffect(() => {
-    if (!autoAcceptEdits || processingDiffRef.current) return;
+    if (permissionMode !== 'auto' || processingDiffRef.current) return;
 
     const pendingDiffs = diffs.filter(d => d.status === 'pending');
     if (pendingDiffs.length === 0) return;
@@ -309,7 +313,7 @@ const CodePage: React.FC = () => {
     handleAcceptDiff(pendingDiffs[0].id).finally(() => {
       processingDiffRef.current = false;
     });
-  }, [diffs, autoAcceptEdits]);
+  }, [diffs, permissionMode]);
 
   const handleAcceptDiff = async (diffId: string) => {
     if (!currentSessionId) return;
@@ -566,12 +570,9 @@ const CodePage: React.FC = () => {
 
                 {/* Auto Accept Toggle - Below input, left aligned */}
                 <div className="mt-2">
-                  <AutoAcceptToggle
-                    enabled={autoAcceptEdits}
-                    onChange={(enabled) => {
-                      setAutoAcceptEdits(enabled);
-                      localStorage.setItem('autoAcceptEdits', JSON.stringify(enabled));
-                    }}
+                  <PermissionModeSelect
+                    value={permissionMode}
+                    onChange={setPermissionMode}
                   />
                 </div>
               </div>
