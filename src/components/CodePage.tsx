@@ -461,32 +461,34 @@ const CodePage: React.FC = () => {
 
       {/* Middle Panel - Chat Area */}
       <div className="flex-1 flex flex-col">
-        {currentSession ? (
-          <>
-            {/* Chat Header */}
-            <div className="px-6 py-4 border-b border-claude-border">
-              <div className="flex items-center gap-2">
-                <Folder className="w-5 h-5 text-claude-textSecondary" />
-                <div>
-                  <div className="text-sm font-medium text-claude-text">
-                    {currentSession.workingDirectory.split(/[/\\]/).pop()}
-                  </div>
-                  <div className="text-xs text-claude-textSecondary">
-                    {currentSession.workingDirectory}
-                  </div>
+        {/* Chat Header - Only show when session is selected */}
+        {currentSession && (
+          <div className="px-6 py-4 border-b border-claude-border">
+            <div className="flex items-center gap-2">
+              <Folder className="w-5 h-5 text-claude-textSecondary" />
+              <div>
+                <div className="text-sm font-medium text-claude-text">
+                  {currentSession.workingDirectory.split(/[/\\]/).pop()}
+                </div>
+                <div className="text-xs text-claude-textSecondary">
+                  {currentSession.workingDirectory}
                 </div>
               </div>
             </div>
+          </div>
+        )}
 
-            {/* Messages Area */}
-            <div className="flex-1 overflow-y-auto p-6">
-              <div className="max-w-3xl mx-auto space-y-4">
-                {messages.length === 0 ? (
-                  <div className="text-center text-claude-textSecondary py-8">
-                    Start a conversation with your code assistant...
-                  </div>
-                ) : (
-                  messages.map((msg) => (
+        {/* Messages Area */}
+        <div className="flex-1 overflow-y-auto p-6">
+          <div className="max-w-3xl mx-auto space-y-4">
+            {messages.length === 0 ? (
+              <div className="text-center text-claude-textSecondary py-8">
+                {currentSession
+                  ? 'Start a conversation with your code assistant...'
+                  : 'Select a session or create a new one to start coding'}
+              </div>
+            ) : (
+              messages.map((msg) => (
                     <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                       <div className="flex-1 max-w-[80%]">
                         <div className={`rounded-lg p-4 ${
@@ -552,76 +554,66 @@ const CodePage: React.FC = () => {
               </div>
             </div>
 
-            {/* Input Area */}
-            <div className="border-t border-claude-border p-4 bg-claude-bg">
-              <div className="max-w-4xl mx-auto">
-                {/* Context Selector - Above input */}
-                <div className="mb-3">
-                  <ContextSelector
-                    selectedContexts={selectedContexts}
-                    onContextsChange={setSelectedContexts}
-                    workingDirectory={currentSession.workingDirectory}
-                    sessionId={currentSessionId || undefined}
-                  />
-                </div>
+        {/* Input Area - Always visible */}
+        <div className="border-t border-claude-border p-4 bg-claude-bg">
+          <div className="max-w-4xl mx-auto">
+            {/* Context Selector - Above input */}
+            {currentSession && (
+              <div className="mb-3">
+                <ContextSelector
+                  selectedContexts={selectedContexts}
+                  onContextsChange={setSelectedContexts}
+                  workingDirectory={currentSession.workingDirectory}
+                  sessionId={currentSessionId || undefined}
+                />
+              </div>
+            )}
 
-                {/* Input box */}
-                <div className="relative">
-                  <textarea
-                    ref={textareaRef}
-                    value={inputValue}
-                    onChange={handleInputChange}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Type / for commands"
-                    className="w-full px-4 py-3 pr-12 bg-claude-input border border-claude-border rounded-lg text-claude-text resize-none focus:outline-none focus:border-claude-accent"
-                    rows={4}
-                    disabled={isSending}
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={!inputValue.trim() || isSending}
-                    className="absolute right-2 bottom-2 p-2 bg-claude-accent text-white rounded-lg hover:bg-claude-accentHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isSending ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Send className="w-5 h-5" />
-                    )}
-                  </button>
-                </div>
+            {/* Input box */}
+            <div className="relative">
+              <textarea
+                ref={textareaRef}
+                value={inputValue}
+                onChange={handleInputChange}
+                onKeyDown={handleKeyDown}
+                placeholder="Type your message..."
+                className="w-full px-4 py-3 pr-12 bg-claude-input border border-claude-border rounded-lg text-claude-text resize-none focus:outline-none focus:border-claude-accent"
+                rows={4}
+                disabled={isSending || !currentSession}
+              />
+              <button
+                onClick={handleSendMessage}
+                disabled={!inputValue.trim() || isSending || !currentSession}
+                className="absolute right-2 bottom-2 p-2 bg-claude-accent text-white rounded-lg hover:bg-claude-accentHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isSending ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Send className="w-5 h-5" />
+                )}
+              </button>
+            </div>
 
-                {/* Bottom toolbar */}
-                <div className="flex items-center justify-between mt-2">
-                  <div className="flex items-center gap-3">
-                    <PermissionModeSelect
-                      value={permissionMode}
-                      onChange={setPermissionMode}
-                    />
-                    <SelectFolderButton
-                      onSelect={(path) => {
-                        console.log('Selected folder:', path);
-                      }}
-                    />
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <ModelBadge model="Sonnet 4.6" />
-                    <LocationBadge location="Local" />
-                  </div>
-                </div>
+            {/* Bottom toolbar */}
+            <div className="flex items-center justify-between mt-2">
+              <div className="flex items-center gap-3">
+                <PermissionModeSelect
+                  value={permissionMode}
+                  onChange={setPermissionMode}
+                />
+                <SelectFolderButton
+                  onSelect={(path) => {
+                    console.log('Selected folder:', path);
+                  }}
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <ModelBadge model="Sonnet 4.6" />
+                <LocationBadge location="Local" />
               </div>
             </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center space-y-4">
-              <div className="text-6xl mb-4">💻</div>
-              <h2 className="text-xl font-semibold text-claude-text">Code Mode</h2>
-              <p className="text-claude-textSecondary max-w-md">
-                Select a session from the left or create a new one to start coding.
-              </p>
-            </div>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
