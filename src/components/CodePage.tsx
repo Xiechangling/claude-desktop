@@ -3,6 +3,7 @@ import { Plus, ChevronDown, Folder, Clock, X, ChevronRight, ChevronLeft, Send, L
 import { useToast } from './Toast';
 import ContextSelector, { ContextItem } from './ContextSelector';
 import PermissionModeSelect, { PermissionMode } from './PermissionModeSelect';
+import DiffCard from './DiffCard';
 
 interface CodeSession {
   id: string;
@@ -484,42 +485,60 @@ const CodePage: React.FC = () => {
                 ) : (
                   messages.map((msg) => (
                     <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] rounded-lg p-4 ${
-                        msg.role === 'user'
-                          ? 'bg-claude-accent text-white'
-                          : 'bg-claude-input border border-claude-border'
-                      }`}>
-                        <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                      <div className="flex-1 max-w-[80%]">
+                        <div className={`rounded-lg p-4 ${
+                          msg.role === 'user'
+                            ? 'bg-claude-accent text-white'
+                            : 'bg-claude-input border border-claude-border'
+                        }`}>
+                          <div className="whitespace-pre-wrap break-words">{msg.content}</div>
 
-                        {/* Tool Calls */}
-                        {msg.toolCalls && msg.toolCalls.length > 0 && (
-                          <div className="mt-3 space-y-2">
-                            {msg.toolCalls.map((tool) => (
-                              <div key={tool.id} className="text-xs bg-black/5 dark:bg-white/5 rounded p-2">
-                                <div className="flex items-center gap-2 mb-1">
-                                  <span className={`w-2 h-2 rounded-full ${
-                                    tool.status === 'success' ? 'bg-green-500' :
-                                    tool.status === 'error' ? 'bg-red-500' :
-                                    'bg-yellow-500'
-                                  }`} />
-                                  <span className="font-medium">{tool.name}</span>
+                          {/* Tool Calls */}
+                          {msg.toolCalls && msg.toolCalls.length > 0 && (
+                            <div className="mt-3 space-y-2">
+                              {msg.toolCalls.map((tool) => (
+                                <div key={tool.id} className="text-xs bg-black/5 dark:bg-white/5 rounded p-2">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className={`w-2 h-2 rounded-full ${
+                                      tool.status === 'success' ? 'bg-green-500' :
+                                      tool.status === 'error' ? 'bg-red-500' :
+                                      'bg-yellow-500'
+                                    }`} />
+                                    <span className="font-medium">{tool.name}</span>
+                                  </div>
+                                  {tool.input && (
+                                    <div className="text-claude-textSecondary mt-1">
+                                      {typeof tool.input === 'string'
+                                        ? tool.input.slice(0, 100)
+                                        : JSON.stringify(tool.input).slice(0, 100)}
+                                    </div>
+                                  )}
+                                  {tool.result && (
+                                    <div className="text-claude-textSecondary mt-1 text-[10px]">
+                                      Result: {typeof tool.result === 'string'
+                                        ? tool.result.slice(0, 50)
+                                        : JSON.stringify(tool.result).slice(0, 50)}
+                                    </div>
+                                  )}
                                 </div>
-                                {tool.input && (
-                                  <div className="text-claude-textSecondary mt-1">
-                                    {typeof tool.input === 'string'
-                                      ? tool.input.slice(0, 100)
-                                      : JSON.stringify(tool.input).slice(0, 100)}
-                                  </div>
-                                )}
-                                {tool.result && (
-                                  <div className="text-claude-textSecondary mt-1 text-[10px]">
-                                    Result: {typeof tool.result === 'string'
-                                      ? tool.result.slice(0, 50)
-                                      : JSON.stringify(tool.result).slice(0, 50)}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Inline Diffs */}
+                        {msg.role === 'assistant' && (
+                          <div className="mt-2">
+                            {diffs
+                              .filter(diff => Math.abs(diff.timestamp - msg.timestamp) < 5000)
+                              .map(diff => (
+                                <DiffCard
+                                  key={diff.id}
+                                  diff={diff}
+                                  onAccept={handleAcceptDiff}
+                                  onReject={handleRejectDiff}
+                                />
+                              ))}
                           </div>
                         )}
                       </div>
