@@ -476,7 +476,7 @@ const CodePage: React.FC = () => {
           <>
             {/* Chat Header */}
             <div className="px-6 py-4 border-b border-claude-border">
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2">
                 <Folder className="w-5 h-5 text-claude-textSecondary" />
                 <div>
                   <div className="text-sm font-medium text-claude-text">
@@ -487,14 +487,6 @@ const CodePage: React.FC = () => {
                   </div>
                 </div>
               </div>
-
-              {/* Context Selector */}
-              <ContextSelector
-                selectedContexts={selectedContexts}
-                onContextsChange={setSelectedContexts}
-                workingDirectory={currentSession.workingDirectory}
-                sessionId={currentSessionId || undefined}
-              />
             </div>
 
             {/* Messages Area */}
@@ -556,17 +548,17 @@ const CodePage: React.FC = () => {
             {/* Input Area */}
             <div className="border-t border-claude-border p-4">
               <div className="max-w-3xl mx-auto">
-                {/* Auto Accept Toggle */}
+                {/* Context Selector - Above input */}
                 <div className="mb-3">
-                  <AutoAcceptToggle
-                    enabled={autoAcceptEdits}
-                    onChange={(enabled) => {
-                      setAutoAcceptEdits(enabled);
-                      localStorage.setItem('autoAcceptEdits', JSON.stringify(enabled));
-                    }}
+                  <ContextSelector
+                    selectedContexts={selectedContexts}
+                    onContextsChange={setSelectedContexts}
+                    workingDirectory={currentSession.workingDirectory}
+                    sessionId={currentSessionId || undefined}
                   />
                 </div>
 
+                {/* Input box with Auto Accept below it */}
                 <div className="relative">
                   <textarea
                     ref={textareaRef}
@@ -589,6 +581,17 @@ const CodePage: React.FC = () => {
                       <Send className="w-5 h-5" />
                     )}
                   </button>
+                </div>
+
+                {/* Auto Accept Toggle - Below input, left aligned */}
+                <div className="mt-2">
+                  <AutoAcceptToggle
+                    enabled={autoAcceptEdits}
+                    onChange={(enabled) => {
+                      setAutoAcceptEdits(enabled);
+                      localStorage.setItem('autoAcceptEdits', JSON.stringify(enabled));
+                    }}
+                  />
                 </div>
               </div>
             </div>

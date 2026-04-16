@@ -21,7 +21,6 @@ const ContextSelector: React.FC<ContextSelectorProps> = ({
   workingDirectory,
   sessionId
 }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
   const [availableFolders, setAvailableFolders] = useState<ContextItem[]>([]);
 
   // Load folders from API
@@ -66,81 +65,30 @@ const ContextSelector: React.FC<ContextSelectorProps> = ({
   };
 
   return (
-    <div className="relative">
-      {/* Selected Chips Display */}
-      <div className="flex flex-wrap gap-2 mb-3">
-        {selectedContexts.length === 0 ? (
+    <div className="flex flex-wrap gap-2">
+      {availableContexts.map((context) => {
+        const Icon = getIcon(context.type);
+        const selected = isSelected(context.id);
+
+        return (
           <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="px-3 py-1.5 bg-claude-input border border-claude-border rounded-lg text-sm text-claude-textSecondary hover:border-claude-borderHover transition-colors"
+            key={context.id}
+            onClick={() => toggleContext(context)}
+            className={`
+              px-3 py-1.5 rounded-lg text-sm font-medium transition-all
+              flex items-center gap-2
+              ${selected
+                ? 'bg-[#4a9eff]/10 border border-[#4a9eff]/30 text-[#4a9eff]'
+                : 'bg-claude-input border border-claude-border text-claude-textSecondary hover:border-claude-borderHover'
+              }
+            `}
           >
-            + Add context
+            <Icon className="w-3.5 h-3.5" />
+            <span>{context.label}</span>
+            {selected && <Check className="w-3.5 h-3.5" />}
           </button>
-        ) : (
-          selectedContexts.map((context) => {
-            const Icon = getIcon(context.type);
-            return (
-              <button
-                key={context.id}
-                onClick={() => toggleContext(context)}
-                className="px-3 py-1.5 bg-claude-accent/10 border border-claude-accent/30 rounded-lg text-sm text-claude-text hover:bg-claude-accent/20 transition-colors flex items-center gap-2 group"
-              >
-                <Icon className="w-3.5 h-3.5 text-claude-accent" />
-                <span>{context.label}</span>
-                <Check className="w-3.5 h-3.5 text-claude-accent" />
-              </button>
-            );
-          })
-        )}
-        {selectedContexts.length > 0 && (
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="px-3 py-1.5 bg-claude-input border border-claude-border rounded-lg text-sm text-claude-textSecondary hover:border-claude-borderHover transition-colors"
-          >
-            + Add more
-          </button>
-        )}
-      </div>
-
-      {/* Dropdown Menu */}
-      {isExpanded && (
-        <>
-          <div
-            className="fixed inset-0 z-10"
-            onClick={() => setIsExpanded(false)}
-          />
-          <div className="absolute top-full left-0 mt-1 w-64 bg-claude-bg border border-claude-border rounded-lg shadow-lg z-20 py-1">
-            {availableContexts.map((context) => {
-              const Icon = getIcon(context.type);
-              const selected = isSelected(context.id);
-
-              return (
-                <button
-                  key={context.id}
-                  onClick={() => {
-                    toggleContext(context);
-                  }}
-                  className={`w-full px-3 py-2 text-left hover:bg-claude-hover transition-colors flex items-center gap-2 ${
-                    selected ? 'bg-claude-accent/5' : ''
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 ${selected ? 'text-claude-accent' : 'text-claude-textSecondary'}`} />
-                  <span className={`text-sm flex-1 ${selected ? 'text-claude-accent font-medium' : 'text-claude-text'}`}>
-                    {context.label}
-                  </span>
-                  {selected && <Check className="w-4 h-4 text-claude-accent" />}
-                </button>
-              );
-            })}
-
-            {availableContexts.length === 0 && (
-              <div className="px-3 py-2 text-sm text-claude-textSecondary text-center">
-                No contexts available
-              </div>
-            )}
-          </div>
-        </>
-      )}
+        );
+      })}
     </div>
   );
 };
