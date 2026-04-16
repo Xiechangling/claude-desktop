@@ -4,6 +4,9 @@ import { useToast } from './Toast';
 import ContextSelector, { ContextItem } from './ContextSelector';
 import PermissionModeSelect, { PermissionMode } from './PermissionModeSelect';
 import DiffCard from './DiffCard';
+import SelectFolderButton from './SelectFolderButton';
+import ModelBadge from './ModelBadge';
+import LocationBadge from './LocationBadge';
 
 interface CodeSession {
   id: string;
@@ -550,8 +553,8 @@ const CodePage: React.FC = () => {
             </div>
 
             {/* Input Area */}
-            <div className="border-t border-claude-border p-4">
-              <div className="max-w-3xl mx-auto">
+            <div className="border-t border-claude-border p-4 bg-claude-bg">
+              <div className="max-w-4xl mx-auto">
                 {/* Context Selector - Above input */}
                 <div className="mb-3">
                   <ContextSelector
@@ -562,16 +565,16 @@ const CodePage: React.FC = () => {
                   />
                 </div>
 
-                {/* Input box with Auto Accept below it */}
+                {/* Input box */}
                 <div className="relative">
                   <textarea
                     ref={textareaRef}
                     value={inputValue}
                     onChange={handleInputChange}
                     onKeyDown={handleKeyDown}
-                    placeholder="Type your message..."
+                    placeholder="Type / for commands"
                     className="w-full px-4 py-3 pr-12 bg-claude-input border border-claude-border rounded-lg text-claude-text resize-none focus:outline-none focus:border-claude-accent"
-                    rows={3}
+                    rows={4}
                     disabled={isSending}
                   />
                   <button
@@ -587,12 +590,23 @@ const CodePage: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Auto Accept Toggle - Below input, left aligned */}
-                <div className="mt-2">
-                  <PermissionModeSelect
-                    value={permissionMode}
-                    onChange={setPermissionMode}
-                  />
+                {/* Bottom toolbar */}
+                <div className="flex items-center justify-between mt-2">
+                  <div className="flex items-center gap-3">
+                    <PermissionModeSelect
+                      value={permissionMode}
+                      onChange={setPermissionMode}
+                    />
+                    <SelectFolderButton
+                      onSelect={(path) => {
+                        console.log('Selected folder:', path);
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <ModelBadge model="Sonnet 4.6" />
+                    <LocationBadge location="Local" />
+                  </div>
                 </div>
               </div>
             </div>
