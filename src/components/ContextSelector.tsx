@@ -75,17 +75,17 @@ const ContextSelector: React.FC<ContextSelectorProps> = ({
             key={context.id}
             onClick={() => toggleContext(context)}
             className={`
-              px-3 py-1.5 rounded-lg text-sm font-medium transition-all
-              flex items-center gap-2
+              px-2.5 py-1 rounded-full text-xs font-medium transition-all
+              flex items-center gap-1.5
               ${selected
-                ? 'bg-[#4a9eff]/10 border border-[#4a9eff]/30 text-[#4a9eff]'
-                : 'bg-claude-input border border-claude-border text-claude-textSecondary hover:border-claude-borderHover'
+                ? 'bg-claude-accent text-white'
+                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
               }
             `}
           >
-            <Icon className="w-3.5 h-3.5" />
+            <Icon className="w-3 h-3" />
             <span>{context.label}</span>
-            {selected && <Check className="w-3.5 h-3.5" />}
+            {selected && <Check className="w-3 h-3" />}
           </button>
         );
       })}
