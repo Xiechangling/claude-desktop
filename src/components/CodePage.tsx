@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, ChevronDown, Folder, Clock, X, ChevronRight, ChevronLeft, Send, Loader2, FileText, Check, XCircle } from 'lucide-react';
+import { Folder, Send, Loader2, FileText, Check, XCircle } from 'lucide-react';
 import { useToast } from './Toast';
 import ContextSelector, { ContextItem } from './ContextSelector';
 import PermissionModeSelect, { PermissionMode } from './PermissionModeSelect';
@@ -7,21 +7,6 @@ import DiffCard from './DiffCard';
 import SelectFolderButton from './SelectFolderButton';
 import ModelBadge from './ModelBadge';
 import LocationBadge from './LocationBadge';
-
-interface CodeSession {
-  id: string;
-  type: string;
-  workingDirectory: string;
-  status: string;
-  createdAt: string;
-  lastActiveAt: string;
-  processStatus?: {
-    pid: number;
-    running: boolean;
-    restartCount: number;
-    uptime: number;
-  } | null;
-}
 
 interface Message {
   id: string;
@@ -51,10 +36,7 @@ interface Diff {
 
 const CodePage: React.FC = () => {
   const toast = useToast();
-  const [environment, setEnvironment] = useState<'local' | 'remote' | 'ssh'>('local');
-  const [sessions, setSessions] = useState<CodeSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
-  const [isCreatingSession, setIsCreatingSession] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -74,11 +56,6 @@ const CodePage: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('permissionMode', permissionMode);
   }, [permissionMode]);
-
-  // Load sessions on mount
-  useEffect(() => {
-    loadSessions();
-  }, []);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -102,72 +79,6 @@ const CodePage: React.FC = () => {
       setDiffs(data.diffs || []);
     } catch (err) {
       console.error('Failed to load diffs:', err);
-    }
-  };
-
-  const loadSessions = async () => {
-    try {
-      const response = await fetch('http://127.0.0.1:30080/api/code/sessions');
-      const data = await response.json();
-      setSessions(data.sessions || []);
-    } catch (err) {
-      console.error('Failed to load sessions:', err);
-      toast.error('Failed to load sessions');
-    }
-  };
-
-  const handleNewSession = async () => {
-    if (isCreatingSession) return;
-
-    setIsCreatingSession(true);
-    try {
-      // Use Electron IPC to open directory picker
-      const directory = await window.electronAPI?.selectDirectory();
-      if (!directory) {
-        setIsCreatingSession(false);
-        return;
-      }
-
-      const response = await fetch('http://127.0.0.1:30080/api/code/sessions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'local',
-          workingDirectory: directory
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to create session');
-      }
-
-      const newSession = await response.json();
-      await loadSessions();
-      setCurrentSessionId(newSession.sessionId);
-      toast.success('Session created successfully');
-    } catch (err) {
-      console.error('Failed to create session:', err);
-      toast.error('Failed to create session: ' + (err as Error).message);
-    } finally {
-      setIsCreatingSession(false);
-    }
-  };
-
-  const handleDeleteSession = async (sessionId: string) => {
-    if (!confirm('Delete this session?')) return;
-
-    try {
-      await fetch(`http://127.0.0.1:30080/api/code/sessions/${sessionId}`, {
-        method: 'DELETE'
-      });
-      await loadSessions();
-      if (currentSessionId === sessionId) {
-        setCurrentSessionId(null);
-      }
-      toast.success('Session deleted');
-    } catch (err) {
-      console.error('Failed to delete session:', err);
-      toast.error('Failed to delete session');
     }
   };
 
@@ -353,137 +264,16 @@ const CodePage: React.FC = () => {
     }
   };
 
-  const currentSession = sessions.find(s => s.id === currentSessionId);
-
   return (
     <div className="flex h-full bg-claude-bg">
-      {/* Left Sidebar - 300px */}
-      <div className="w-[300px] border-r border-claude-border flex flex-col bg-claude-bg">
-        {/* Environment Selector */}
-        <div className="p-4 border-b border-claude-border">
-          <label className="block text-xs font-medium text-claude-textSecondary mb-2">
-            Environment
-          </label>
-          <div className="relative">
-            <select
-              value={environment}
-              onChange={(e) => setEnvironment(e.target.value as any)}
-              className="w-full px-3 py-2 bg-claude-input border border-claude-border rounded-lg text-claude-text appearance-none cursor-pointer hover:border-claude-borderHover transition-colors"
-              disabled={environment !== 'local'}
-            >
-              <option value="local">Local</option>
-              <option value="remote" disabled>Remote (Coming Soon)</option>
-              <option value="ssh" disabled>SSH (Coming Soon)</option>
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-claude-textSecondary pointer-events-none" />
-          </div>
-        </div>
-
-        {/* New Session Button */}
-        <div className="p-4 border-b border-claude-border">
-          <button
-            onClick={handleNewSession}
-            disabled={isCreatingSession}
-            className="w-full px-4 py-2 bg-claude-accent text-white rounded-lg hover:bg-claude-accentHover transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isCreatingSession ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Creating...
-              </>
-            ) : (
-              <>
-                <Plus className="w-4 h-4" />
-                New Session
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Session List */}
-        <div className="flex-1 overflow-y-auto">
-          {sessions.length === 0 ? (
-            <div className="p-4 text-center text-claude-textSecondary text-sm">
-              No sessions yet. Click "New Session" to start.
-            </div>
-          ) : (
-            <div className="p-2">
-              {sessions.map((session) => (
-                <div
-                  key={session.id}
-                  onClick={() => setCurrentSessionId(session.id)}
-                  className={`p-3 mb-2 rounded-lg cursor-pointer transition-colors ${
-                    currentSessionId === session.id
-                      ? 'bg-claude-accent/10 border border-claude-accent'
-                      : 'hover:bg-claude-hover border border-transparent'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Folder className="w-4 h-4 text-claude-textSecondary flex-shrink-0" />
-                        <span className="text-sm font-medium text-claude-text truncate">
-                          {session.workingDirectory.split(/[/\\]/).pop() || 'Project'}
-                        </span>
-                      </div>
-                      <div className="text-xs text-claude-textSecondary truncate mb-1">
-                        {session.workingDirectory}
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-claude-textSecondary">
-                        <Clock className="w-3 h-3" />
-                        {new Date(session.createdAt).toLocaleString()}
-                      </div>
-                      {session.processStatus && (
-                        <div className="mt-1 flex items-center gap-1">
-                          <span className={`w-2 h-2 rounded-full ${session.processStatus.running ? 'bg-green-500' : 'bg-red-500'}`} />
-                          <span className="text-xs text-claude-textSecondary">
-                            {session.processStatus.running ? 'Running' : 'Stopped'}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteSession(session.id);
-                      }}
-                      className="p-1 hover:bg-claude-hover rounded transition-colors"
-                    >
-                      <X className="w-4 h-4 text-claude-textSecondary" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Middle Panel - Chat Area */}
+      {/* Main Content Area */}
       <div className="flex-1 flex flex-col">
-        {/* Chat Header - Only show when session is selected */}
-        {currentSession && (
-          <div className="px-6 py-4 border-b border-claude-border">
-            <div className="flex items-center gap-2">
-              <Folder className="w-5 h-5 text-claude-textSecondary" />
-              <div>
-                <div className="text-sm font-medium text-claude-text">
-                  {currentSession.workingDirectory.split(/[/\\]/).pop()}
-                </div>
-                <div className="text-xs text-claude-textSecondary">
-                  {currentSession.workingDirectory}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Messages Area */}
         <div className="flex-1 overflow-y-auto p-6">
           <div className="max-w-3xl mx-auto space-y-4">
             {messages.length === 0 ? (
               <div className="text-center text-claude-textSecondary py-8">
-                {currentSession
+                {currentSessionId
                   ? 'Start a conversation with your code assistant...'
                   : 'Select a session or create a new one to start coding'}
               </div>
@@ -557,18 +347,6 @@ const CodePage: React.FC = () => {
         {/* Input Area - Always visible */}
         <div className="border-t border-claude-border p-4 bg-claude-bg">
           <div className="max-w-4xl mx-auto">
-            {/* Context Selector - Above input */}
-            {currentSession && (
-              <div className="mb-3">
-                <ContextSelector
-                  selectedContexts={selectedContexts}
-                  onContextsChange={setSelectedContexts}
-                  workingDirectory={currentSession.workingDirectory}
-                  sessionId={currentSessionId || undefined}
-                />
-              </div>
-            )}
-
             {/* Input box */}
             <div className="relative">
               <textarea
@@ -579,11 +357,11 @@ const CodePage: React.FC = () => {
                 placeholder="Type your message..."
                 className="w-full px-4 py-3 pr-12 bg-claude-input border border-claude-border rounded-lg text-claude-text resize-none focus:outline-none focus:border-claude-accent"
                 rows={4}
-                disabled={isSending || !currentSession}
+                disabled={isSending || !currentSessionId}
               />
               <button
                 onClick={handleSendMessage}
-                disabled={!inputValue.trim() || isSending || !currentSession}
+                disabled={!inputValue.trim() || isSending || !currentSessionId}
                 className="absolute right-2 bottom-2 p-2 bg-claude-accent text-white rounded-lg hover:bg-claude-accentHover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSending ? (
